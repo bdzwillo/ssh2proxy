@@ -1,0 +1,27 @@
+#
+# sshproxy configuration
+#
+
+# listen addr for proxy
+bindaddr = 127.0.0.1:22222
+
+# might reuse local ssh hostkeys for proxy client side
+hostkey = /etc/ssh/ssh_host_ed25519_key
+hostkey = /etc/ssh/ssh_host_ecdsa_key
+hostkey = /etc/ssh/ssh_host_rsa_key
+
+# configure key for hostbased connection to backend server 
+#hostkey_auth = /opt/ssh2proxy/etc/ssh_host_proxy
+
+# allow server connections to host2
+#hostkey = /opt/ssh2proxy/etc/ssh_host2_rsa_key.pub
+
+# enable switch methods
+switch_methods = fixed
+
+# default server for fixed switch if no user matches
+default_server = 127.0.0.1:22
+
+# for <user2> switch connection to <host2>
+#switch_target = user2 host2.example.com:22
+

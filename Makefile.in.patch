@@ -1,0 +1,29 @@
+--- a/openssh/Makefile.in
++++ b/openssh/Makefile.in
+@@ -132,6 +132,8 @@ SSHDOBJS=sshd.o auth-rhosts.o auth-passwd.o \
+ 	sandbox-seccomp-filter.o sandbox-capsicum.o sandbox-pledge.o \
+ 	sandbox-solaris.o uidswap.o $(SKOBJS)
+ 
++SSHPROXYOBJS=sshproxy.o proxyconf.o proxyauth.o ssh2.o switch-fixed.o filter-mitm.o $(SKOBJS)
++
+ SCP_OBJS=	scp.o progressmeter.o
+ 
+ SSHADD_OBJS=	ssh-add.o $(SKOBJS)
+@@ -187,6 +189,7 @@ all: configure-check $(CONFIGFILES) $(MANPAGES) $(TARGETS)
+ $(LIBSSH_OBJS): Makefile.in config.h
+ $(SSHOBJS): Makefile.in config.h
+ $(SSHDOBJS): Makefile.in config.h
++$(SSHPROXYOBJS): Makefile.in config.h
+ configure-check: $(srcdir)/configure
+ 
+ $(srcdir)/configure: configure.ac aclocal.m4
+@@ -211,6 +214,9 @@ ssh$(EXEEXT): $(LIBCOMPAT) libssh.a $(SSHOBJS)
+ sshd$(EXEEXT): libssh.a	$(LIBCOMPAT) $(SSHDOBJS)
+ 	$(LD) -o $@ $(SSHDOBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS)
+ 
++sshproxy$(EXEEXT): libssh.a $(LIBCOMPAT) $(SSHPROXYOBJS)
++	$(LD) -o $@ $(SSHPROXYOBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS)
++
+ scp$(EXEEXT): $(LIBCOMPAT) libssh.a $(SCP_OBJS)
+ 	$(LD) -o $@ $(SCP_OBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(LIBS)
+ 
