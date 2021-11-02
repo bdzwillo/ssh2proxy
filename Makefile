@@ -1,8 +1,9 @@
-# ssh2proxy - (openssh-libssh based)
+#
+# sshproxy - openssh based ssh2 proxy for multiple ssh backend hosts
 #
 # need to download openssh tar-archive first, like:
 # > wget https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-8.2p1.tar.gz
-
+#
 INSTDIR =		/opt
 PACKAGE_NAME =		ssh2proxy
 OPENSSH =		openssh-8.2p1
@@ -33,7 +34,7 @@ ifneq ($(SSH_PATCHES),)
 endif
 
 $(OPENSSH):
-	gtar zxf $(OPENSSH).tar.gz
+	tar zxf $(OPENSSH).tar.gz
 	ln -s ../sshproxy.c $(OPENSSH)/
 	ln -s ../sshproxy.h $(OPENSSH)/
 	ln -s ../proxyconf.c $(OPENSSH)/
