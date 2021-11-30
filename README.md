@@ -1,27 +1,31 @@
 ssh2proxy
 ========= 
-The sshproxy allows to select different ssh backend hosts based on
-the ssh username. This allows users of multiple sshservers to
+The sshproxy allows to select different ssh backend hosts based
+on the ssh username. This allows users of multiple sshservers to
 access the ssh service through a single endpoint.
 
-Currently the ssh2proxy supports password & pubkey authentication
-for the ssh2 protocol.
+The proxy implements the client-side and server-side connections
+using the api of the libssh.a provided by the openssh project.
+This allows the proxy code to stay in sync with openssh updates
+and bugfixes.
 
-The switch mechanism allows the sshproxy to act as a man-in-the-middle.
-But to allow completely transparent operation for a client, the sshproxy
-has to use the same hostkeys as the backend ssh servers. So it poses
-no risk to a client, because the use of a different hostkey on the
-same endpoint would be noticed.
+The current version is built on top of openssh-8.2p1.
 
-The ssh2proxy implementation is based on the openssh project.
+The proxy supports ssh2 password & pubkey authentication.
 
-The backend host for each user can be configured in the sshproxy config
-file, as well as a default host. For more complex setups it is possible
-to add a special switch module to the implementation.
+To allow transparent operation for a client, the ssh2proxy has to
+use the same hostkeys as the backend ssh servers. With different
+hostkeys a client with existing known_hosts entries would notice
+the proxy as a man-in-the-middle.
 
-To support public key authentication the sshproxy has to use a different
-authentication scheme for the backend connection. The current implementation
-allows to use hostbased authentication for the backend. More info below.
+The backend host for each user can be configured in the sshproxy
+config file. For more complex setups it is possible to add a
+special switch module to the implementation.
+
+For public key authentication the ssh2proxy has to use a different
+authentication scheme for the backend connection. The current
+implementation allows to switch to hostbased authentication for
+the backend. More info below.
 
 Configuration
 -------------
@@ -46,10 +50,11 @@ configuration of the sshproxy.
 sshproxy protocol handling
 --------------------------
 1) In the first step the ssh protocol negotiation and the ssh key-exchange
-   (like Diffie-Hellman) take only place between sshclient and sshproxy.
+   take place only between sshclient and sshproxy.
 
-   The hostkey of the sshproxy is used for the key-exchange, to generate
-   the session-id (priv) and is also transmitted in the proposal (pub).
+   The hostkey configured for the sshproxy is used for the key-exchange,
+   to generate the session-id (priv) and is also transmitted in the
+   proposal (pub).
 
 2) After the key-exchange the sshproxy waits for a USERAUTH-requests with
    the 'username' for 'password' or 'pubkey' authentication.
@@ -99,12 +104,12 @@ Public Key Authentication:
 
    For this reason it is necessary to use a different authentication
    like 'hostbased' for the Backend-Connection at this place.
-   (see the example for hostbased configuration in a later section)
+   (see the example for hostbased configuration below)
 
 9) For sshkeys without passphrase the protocol is slightly different.
    In this case already the first USERAUTH-request from the sshclient
    includes a signed sshkey. The sshproxy will pass this sshkey without
-   signature on the sshserver and then coninues as in point (8).
+   signature on to the sshserver and then continues at point (8).
 
 ssh2 states for public key authentication
 -----------------------------------------
