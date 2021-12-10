@@ -54,6 +54,7 @@ struct Authctxt {
 	char *service;
 	char *method;
 	char *server_methods;
+	char *server_user;
 	char *style;
 	int have_sig;
 	struct sshkey *key;

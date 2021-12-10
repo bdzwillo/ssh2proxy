@@ -34,6 +34,8 @@ int proxyauth_send_service_accept(struct ssh *ssh);
 int proxyauth_send_reply(struct ssh *ssh, struct Authctxt *authctxt);
 int proxyauth_send_features(struct ssh *ssh, struct Authctxt *authctxt);
 int proxyauth_send_failure_passwd_only(struct ssh *ssh);
+int proxyauth_send_none(struct ssh *ssh, struct Authctxt *authctxt);
+int proxyauth_send_passwd(struct ssh *ssh, struct Authctxt *authctxt);
 int proxyauth_send_start_hostbased(struct ssh *ssh);
 int proxyauth_send_hostbased(struct ssh *ssh, struct Authctxt *authctxt,
 	struct sshkey *private);

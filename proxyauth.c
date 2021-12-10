@@ -540,6 +540,49 @@ int proxyauth_recv_auth_pkg(struct ssh *ssh, struct Authctxt *authctxt, struct s
 	return 0;
 }
 
+int proxyauth_send_none(struct ssh *ssh, struct Authctxt *authctxt)
+{
+	int r;
+	char *method = "none";
+
+	if ((r = sshpkt_start(ssh, SSH2_MSG_USERAUTH_REQUEST)) != 0 ||
+	    (r = sshpkt_put_cstring(ssh, authctxt->server_user ? authctxt->server_user : authctxt->user)) != 0 ||
+	    (r = sshpkt_put_cstring(ssh, authctxt->service)) != 0 ||
+	    (r = sshpkt_put_cstring(ssh, method)) != 0 ||
+	    (r = sshpkt_send(ssh)) != 0) {
+		error("%s: buffer error: %s", __func__, ssh_err(r));
+		return r;
+	}
+	if ((r = ssh_packet_write_wait(ssh)) != 0) {
+		error("auth_send_none: packet_write: %s", ssh_err(r));
+		return r;
+	}
+	return 0;
+}
+
+int proxyauth_send_passwd(struct ssh *ssh, struct Authctxt *authctxt)
+{
+	int r;
+	char *method = "password";
+
+	if ((r = sshpkt_start(ssh, SSH2_MSG_USERAUTH_REQUEST)) != 0 ||
+	    (r = sshpkt_put_cstring(ssh, authctxt->server_user ? authctxt->server_user : authctxt->user)) != 0 ||
+	    (r = sshpkt_put_cstring(ssh, authctxt->service)) != 0 ||
+	    (r = sshpkt_put_cstring(ssh, method)) != 0 ||
+	    (r = sshpkt_put_u8(ssh, 0)) != 0 ||
+	    (r = sshpkt_put_cstring(ssh, authctxt->passwd)) != 0 ||
+	    (r = sshpkt_add_padding(ssh, 64)) != 0 ||
+	    (r = sshpkt_send(ssh)) != 0) {
+		error("%s: buffer error: %s", __func__, ssh_err(r));
+		return r;
+	}
+	if ((r = ssh_packet_write_wait(ssh)) != 0) {
+		error("auth_send_passwd: packet_write: %s", ssh_err(r));
+		return r;
+	}
+	return 0;
+}
+
 int proxyauth_send_hostbased(struct ssh *ssh, struct Authctxt *authctxt,
 	struct sshkey *private)
 {
@@ -581,11 +624,12 @@ int proxyauth_send_hostbased(struct ssh *ssh, struct Authctxt *authctxt,
 		error("%s: sshkey_to_blob: %s", __func__, ssh_err(r));
 		goto out;
 	}
-	local_user = authctxt->user; /* make local user the same as remote */
+	/* make local user the same as remote */
+	local_user = authctxt->server_user ? authctxt->server_user : authctxt->user;
 
 	if ((r = sshbuf_put_string(b, ssh->kex->session_id, ssh->kex->session_id_len)) != 0 ||
 	    (r = sshbuf_put_u8(b, SSH2_MSG_USERAUTH_REQUEST)) != 0 ||
-	    (r = sshbuf_put_cstring(b, authctxt->user)) != 0 ||
+	    (r = sshbuf_put_cstring(b, authctxt->server_user ? authctxt->server_user : authctxt->user)) != 0 ||
 	    (r = sshbuf_put_cstring(b, authctxt->service)) != 0 ||
 	    (r = sshbuf_put_cstring(b, method)) != 0 ||
 	    (r = sshbuf_put_cstring(b, sshkey_ssh_name(private))) != 0 ||
@@ -605,7 +649,7 @@ int proxyauth_send_hostbased(struct ssh *ssh, struct Authctxt *authctxt,
 		goto out;
 	}
 	if ((r = sshpkt_start(ssh, SSH2_MSG_USERAUTH_REQUEST)) != 0 ||
-	    (r = sshpkt_put_cstring(ssh, authctxt->user)) != 0 ||
+	    (r = sshpkt_put_cstring(ssh, authctxt->server_user ? authctxt->server_user : authctxt->user)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, authctxt->service)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, method)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, sshkey_ssh_name(private))) != 0 ||
@@ -653,7 +697,7 @@ int proxyauth_send_pubkey_nosig(struct ssh *ssh, struct Authctxt *authctxt)
 		goto out;
 	}
 	if ((r = sshpkt_start(ssh, SSH2_MSG_USERAUTH_REQUEST)) != 0 ||
-	    (r = sshpkt_put_cstring(ssh, authctxt->user)) != 0 ||
+	    (r = sshpkt_put_cstring(ssh, authctxt->server_user ? authctxt->server_user : authctxt->user)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, authctxt->service)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, authctxt->method)) != 0 ||
 	    (r = sshpkt_put_u8(ssh, have_sig)) != 0 ||

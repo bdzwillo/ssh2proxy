@@ -127,7 +127,7 @@ struct Filtermethod *filtermethods[] = {
 	NULL
 };
 
-#define PROXY_VERSION "0.22"
+#define PROXY_VERSION "0.23"
 
 static void usage(void)
 {
@@ -641,25 +641,46 @@ int server_connect(struct Authctxt *authctxt, const char *name, const char *port
 	int timeout_ms = tmo * 1000;
 	struct addrinfo *addrs;
 	struct sockaddr_storage hostaddr;
+	char *server_user = NULL;
+	char *server = NULL;
 	char host[NI_MAXHOST];
 
 	if (strlcpy(host, name, sizeof(host)) >= sizeof(host)) { 
 		return EINVAL;
 	}
+	server = host;
+
 	if ((p = strrchr(host,':'))) {
 		*p = '\0';
 		port = p+1;
 	}
-	if (!(addrs = resolve_host(host, port, options.server_family, authctxt->server_cname, sizeof(authctxt->server_cname)))) {
+	if ((p = strrchr(host,'@'))) {
+		if (p == host) {
+			return EINVAL; // empty user
+		}
+		*p = '\0';
+		server_user = host;
+		server = p+1;
+	}
+	if (!(addrs = resolve_host(server, port, options.server_family, authctxt->server_cname, sizeof(authctxt->server_cname)))) {
 		return EINVAL;
 	}
 
 	/* Open a connection to the remote host. */
-	if ((err = ssh_connect(host, addrs, &hostaddr, &timeout_ms, tcp_keep_alive, bindaddr, sock)) != 0) {
+	if ((err = ssh_connect(server, addrs, &hostaddr, &timeout_ms, tcp_keep_alive, bindaddr, sock)) != 0) {
 		return err;
 	}
 	if (addrs != NULL) {
 		freeaddrinfo(addrs);
+	}
+	/* switch to different server user if configured
+	 */
+	if (authctxt->server_user) {
+		free(authctxt->server_user);
+		authctxt->server_user = NULL;
+	}
+	if (server_user) {
+		authctxt->server_user = xstrdup(server_user);
 	}
 	return 0;
 }
@@ -706,10 +727,12 @@ int server_connect_list(struct Authctxt *authctxt, char **server, unsigned int n
 
 static void authctxt_update(struct Authctxt *authctxt)
 {
-	snprintf(authctxt->id, sizeof(authctxt->id), "[%s] (%s:%d -> %s:%d %s)",
+	snprintf(authctxt->id, sizeof(authctxt->id), "[%s] (%s:%d -> %s%s%s:%d %s)",
 		authctxt->user ? authctxt->user : "-",
 		authctxt->ssh_client ? ssh_remote_ipaddr(authctxt->ssh_client) : "NONE",
 		authctxt->ssh_client ? ssh_remote_port(authctxt->ssh_client) : 0,
+		authctxt->server_user ? authctxt->server_user : "",
+		authctxt->server_user ? "@" : "",
 		authctxt->server_cname[0] ? authctxt->server_cname : (authctxt->ssh_server ? ssh_remote_ipaddr(authctxt->ssh_server) : "NONE"),
 		authctxt->ssh_server ? ssh_remote_port(authctxt->ssh_server) : 0,
 		authctxt->method ? authctxt->method : "connecting");
@@ -722,22 +745,17 @@ static void setstat(struct Authctxt *authctxt, int state)
 	authctxt_update(authctxt);
 }
 
-static void handle_auth_request(
-	struct Authctxt *authctxt, struct ssh *ssh_server, int *ignore)
+static void handle_auth_request(struct Authctxt *authctxt, struct ssh *ssh_server, struct sshbuf *auth_sb)
 {
 	int r;
 
 	/* proxyauth_recv_request() has alread been called */
 
-	debug("Client: SSH2_MSG_USERAUTH_REQUEST, requested method: %s "
-		"state=%d, authenticated=%d",
-		authctxt->method, authctxt->state, authctxt->authenticated);
-
-	*ignore = 0;
+	debug("%s: handle_auth_request state=%d, authenticated=%d",
+		authctxt->id, authctxt->state, authctxt->authenticated);
 
 	if (authctxt->state != AUTHSTAT_INIT) {
-		fatal("client sent SSH2_MSG_USERAUTH_REQUEST "
-			"while other SSH2_MSG_USERAUTH_REQUEST");
+		fatal("%s: received SSH2_MSG_USERAUTH_REQUEST in bad state: %d", authctxt->id, authctxt->state);
 	}
 
 	if (strcmp(authctxt->method, "publickey") == 0) {
@@ -747,27 +765,57 @@ static void handle_auth_request(
 		if (authctxt->authenticated) {
 			/* send USERAUTH_REQUEST without sig to verify
 			 * the server knows the pubkey
+			 *
+			 * TODO: this might be the second pubkey test
+			 *       request for the authenticated key.
 			 */
 			if ((r = proxyauth_send_pubkey_nosig(ssh_server, authctxt)) != 0) {
-				fatal("auth nosig failed: %s", ssh_err(r));
+				fatal("%s: send pubkey nosig failed: %s", authctxt->id, ssh_err(r));
 			}
 			setstat(authctxt, AUTHSTAT_PUBKEY_NOSIG);
-			*ignore = 1;
-		} else {
-			/* no or wrong sig, passthrough USERAUTH_REQUEST and
-			* let server create the suitable response
-			*/
-			setstat(authctxt, AUTHSTAT_PUBKEY);
+			return;
 		}
-		return;
-	}
+		if (!authctxt->have_sig) {
+			if ((r = proxyauth_send_pubkey_nosig(ssh_server, authctxt)) != 0) {
+				fatal("%s: send pubkey nosig failed: %s", authctxt->id, ssh_err(r));
+			}
+			setstat(authctxt, AUTHSTAT_PUBKEY);
+			return;
+		}
 
-	/* Other auth methods like 'password' and 'none' we can passthrough
-	 */
-	if (strcmp(authctxt->method, "password") == 0)
+		/* wrong sig, passthrough USERAUTH_REQUEST and
+		 * let server create the suitable response
+		 */
+		if (authctxt->server_user) {
+			fatal("%s: can't handle method %s for server_user: %s", authctxt->id, authctxt->method, authctxt->server_user);
+		}
+		if ((r = ssh2_send(ssh_server, SSH2_MSG_USERAUTH_REQUEST, sshbuf_ptr(auth_sb), sshbuf_len(auth_sb))) != 0) {
+			fatal("%s: relay client userauth to server failed: %s", authctxt->id, ssh_err(r));
+		}
+		setstat(authctxt, AUTHSTAT_PUBKEY);
+	} else if (strcmp(authctxt->method, "password") == 0) {
+		if ((r = proxyauth_send_passwd(ssh_server, authctxt)) != 0) {
+			fatal("auth password failed: %s", ssh_err(r));
+		}
 		setstat(authctxt, AUTHSTAT_PASSWD);
-	else
+	} else if (strcmp(authctxt->method, "none") == 0) {
+		if ((r = proxyauth_send_none(ssh_server, authctxt)) != 0) {
+			fatal("auth password failed: %s", ssh_err(r));
+		}
 		setstat(authctxt, AUTHSTAT_OTHER);
+	} else {
+		/* Other auth methods can be passed through,
+		 * only if the server_user matches.
+		 */
+		if (authctxt->server_user) {
+			fatal("%s: can't handle method %s for server_user: %s", authctxt->id, authctxt->method, authctxt->server_user);
+		}
+		/* passthrough USERAUTH_REQUEST */
+		if ((r = ssh2_send(ssh_server, SSH2_MSG_USERAUTH_REQUEST, sshbuf_ptr(auth_sb), sshbuf_len(auth_sb))) != 0) {
+			fatal("%s: relay client userauth to server failed: %s", authctxt->id, ssh_err(r));
+		}
+		setstat(authctxt, AUTHSTAT_OTHER);
+	}
 }
 
 static int check_login(struct ssh *ssh, struct Authctxt *authctxt, int isgood)
@@ -869,7 +917,6 @@ static void proxy_child2(struct Authctxt *authctxt, struct ssh *ssh_client)
 	SSH2_CTX *ssh_server_ctx;
 	char *cp;
 	char *sp;
-	int ignore;
 	unsigned int nserver = 0;
 	unsigned int maxserver = 8;
 	char *serverlist[maxserver];
@@ -965,12 +1012,7 @@ static void proxy_child2(struct Authctxt *authctxt, struct ssh *ssh_client)
 	}
 
 	/* Forward auth pkg to server. */
-	handle_auth_request(authctxt, ssh_server, &ignore);
-	if (!ignore) {
-		if ((r = ssh2_send(ssh_server, SSH2_MSG_USERAUTH_REQUEST, sshbuf_ptr(auth_sb), sshbuf_len(auth_sb))) != 0) {
-			fatal("%s: relay client userauth to server failed: %s", authctxt->id, ssh_err(r));
-		}
-	}
+	handle_auth_request(authctxt, ssh_server, auth_sb);
 	sshbuf_free(auth_sb);
 	auth_sb = NULL;
 
@@ -1070,13 +1112,7 @@ static void proxy_child2(struct Authctxt *authctxt, struct ssh *ssh_client)
 				if ((r = proxyauth_recv_request(ssh_client, authctxt)) != 0) {
 					fatal("%s: recv next client userauth failed: %s", authctxt->id, ssh_err(r));
 				}
-				handle_auth_request(authctxt, ssh_server, &ignore);
-				if (!ignore) {
-					/* passthrough USERAUTH_REQUEST */
-					if ((r = ssh2_send(ssh_server, SSH2_MSG_USERAUTH_REQUEST, sshbuf_ptr(auth_sb), sshbuf_len(auth_sb))) != 0) {
-						fatal("%s: relay next client userauth to server failed: %s", authctxt->id, ssh_err(r));
-					}
-				}
+				handle_auth_request(authctxt, ssh_server, auth_sb);
 				sshbuf_free(auth_sb);
 				auth_sb = NULL;
 				continue;
