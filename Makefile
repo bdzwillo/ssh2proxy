@@ -10,6 +10,7 @@ OPENSSH =		openssh-8.2p1
 
 PATCH = patch
 SSH_PATCHES = Makefile.in.patch
+ADD_CFLAGS = -DOPENSSL_SUPPRESS_DEPRECATED
 
 all: sshproxy
 
@@ -55,7 +56,7 @@ ssh-configure:
 	( cd $(OPENSSH) && \
 	 	./configure \
 		--prefix=$(INSTDIR)/$(PACKAGE_NAME) \
-		--with-cflags="-O3 $(PROF)" \
+		--with-cflags="-O3 $(ADD_CFLAGS)" \
 		--with-default-path=/bin \
 	)
 
