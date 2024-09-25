@@ -416,12 +416,12 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 				return SSH_ERR_ALLOC_FAIL;
 			}
 			if (ssh->compat & SSH_OLD_SESSIONID) {
-				if ((r = sshbuf_put(b, ssh->kex->session_id, ssh->kex->session_id_len)) != 0) {
+				if ((r = sshbuf_putb(b, ssh->kex->session_id)) != 0) {
 					error("auth2: sshbuf_put session id: %s", ssh_err(r));
 					return r;
 				}
 			} else {
-				if ((r = sshbuf_put_string(b, ssh->kex->session_id, ssh->kex->session_id_len)) != 0) {
+				if ((r = sshbuf_put_stringb(b, ssh->kex->session_id)) != 0) {
 					error("auth2: sshbuf_put_string session id: %s", ssh_err(r));
 					return r;
 				}
@@ -437,14 +437,13 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 			if ((r = sshbuf_put_u8(b, SSH2_MSG_USERAUTH_REQUEST)) != 0 ||
 			    (r = sshbuf_put_cstring(b, userstyle)) != 0 ||
 			    (r = sshbuf_put_cstring(b, authctxt->service)) != 0 ||
-			    (r = sshbuf_put_cstring(b, "publickey")) != 0 ||
+			    (r = sshbuf_put_cstring(b, method)) != 0 ||
 			    (r = sshbuf_put_u8(b, have_sig)) != 0 ||
 			    (r = sshbuf_put_cstring(b, pkalg)) != 0 ||
 			    (r = sshbuf_put_string(b, pkblob, blen)) != 0) {
 				error("auth2: build packet failed: %s", ssh_err(r));
 				return r;
 			}
-
 			if (Opt_debug) {
 				sshbuf_dump(b, stderr);
 			}
@@ -627,7 +626,7 @@ int proxyauth_send_hostbased(struct ssh *ssh, struct Authctxt *authctxt,
 	/* make local user the same as remote */
 	local_user = authctxt->server_user ? authctxt->server_user : authctxt->user;
 
-	if ((r = sshbuf_put_string(b, ssh->kex->session_id, ssh->kex->session_id_len)) != 0 ||
+	if ((r = sshbuf_put_stringb(b, ssh->kex->session_id)) != 0 ||
 	    (r = sshbuf_put_u8(b, SSH2_MSG_USERAUTH_REQUEST)) != 0 ||
 	    (r = sshbuf_put_cstring(b, authctxt->server_user ? authctxt->server_user : authctxt->user)) != 0 ||
 	    (r = sshbuf_put_cstring(b, authctxt->service)) != 0 ||
@@ -643,7 +642,7 @@ int proxyauth_send_hostbased(struct ssh *ssh, struct Authctxt *authctxt,
 		sshbuf_dump(b, stderr);
 	}
 	if ((r = sshkey_sign(private, &sig, &siglen,
-	    sshbuf_ptr(b), sshbuf_len(b), sshkey_ssh_name(private), NULL, ssh->compat)) != 0) {
+	    sshbuf_ptr(b), sshbuf_len(b), sshkey_ssh_name(private), NULL, NULL, ssh->compat)) != 0) {
 		error("sign using hostkey %s %s failed: %s",
 		    sshkey_ssh_name(private), fp, ssh_err(r));
 		goto out;

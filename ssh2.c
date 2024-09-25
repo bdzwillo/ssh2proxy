@@ -100,10 +100,10 @@ static int ssh_compat_proposal(struct ssh *ssh)
 	if ((r = kex_buf2prop(ssh->kex->my, NULL, &proposal)) != 0) {
 		return r;
 	}
-	proposal[PROPOSAL_KEX_ALGS] = compat_kex_proposal(proposal[PROPOSAL_KEX_ALGS]);
-	proposal[PROPOSAL_ENC_ALGS_CTOS] = compat_cipher_proposal(proposal[PROPOSAL_ENC_ALGS_CTOS]);
-	proposal[PROPOSAL_ENC_ALGS_STOC] = compat_cipher_proposal(proposal[PROPOSAL_ENC_ALGS_STOC]);
-	proposal[PROPOSAL_SERVER_HOST_KEY_ALGS] = compat_pkalg_proposal(proposal[PROPOSAL_SERVER_HOST_KEY_ALGS]);
+	proposal[PROPOSAL_KEX_ALGS] = compat_kex_proposal(ssh, proposal[PROPOSAL_KEX_ALGS]);
+	proposal[PROPOSAL_ENC_ALGS_CTOS] = compat_cipher_proposal(ssh, proposal[PROPOSAL_ENC_ALGS_CTOS]);
+	proposal[PROPOSAL_ENC_ALGS_STOC] = compat_cipher_proposal(ssh, proposal[PROPOSAL_ENC_ALGS_STOC]);
+	proposal[PROPOSAL_SERVER_HOST_KEY_ALGS] = compat_pkalg_proposal(ssh, proposal[PROPOSAL_SERVER_HOST_KEY_ALGS]);
 
 	r = kex_prop2buf(ssh->kex->my, proposal);
 	kex_prop_free(proposal);
@@ -160,7 +160,7 @@ struct ssh *ssh2_new(SSH2_CTX *ctx, int is_server, char **proposal)
 # endif
 #endif /* WITH_OPENSSL */
 		ssh->kex->kex[KEX_C25519_SHA256] = kex_gen_server;
-		ssh->kex->kex[KEX_KEM_SNTRUP4591761X25519_SHA512] = kex_gen_server;
+		ssh->kex->kex[KEX_KEM_SNTRUP761X25519_SHA512] = kex_gen_server;
 		ssh->kex->load_host_public_key=&_ssh_host_public_key;
 		ssh->kex->load_host_private_key=&_ssh_host_private_key;
 		ssh->kex->sign=&_ssh_host_key_sign;
@@ -178,7 +178,7 @@ struct ssh *ssh2_new(SSH2_CTX *ctx, int is_server, char **proposal)
 # endif
 #endif /* WITH_OPENSSL */
 		ssh->kex->kex[KEX_C25519_SHA256] = kex_gen_client;
-		ssh->kex->kex[KEX_KEM_SNTRUP4591761X25519_SHA512] = kex_gen_client;
+		ssh->kex->kex[KEX_KEM_SNTRUP761X25519_SHA512] = kex_gen_client;
 		ssh->kex->verify_host_key =&ssh2_verify_host_key;
 	}
 	return ssh;

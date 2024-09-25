@@ -1,23 +1,24 @@
---- a/openssh/Makefile.in
-+++ b/openssh/Makefile.in
-@@ -132,6 +132,8 @@ SSHDOBJS=sshd.o auth-rhosts.o auth-passwd.o \
+diff -ur a/openssh-8.9p1-orig/Makefile.in a/openssh-8.9p1/Makefile.in
+--- a/openssh-8.9p1-orig/Makefile.in	2022-02-23 12:31:11.000000000 +0100
++++ b/openssh-8.9p1/Makefile.in	2024-08-30 16:11:01.000000000 +0200
+@@ -133,6 +133,8 @@
  	sandbox-seccomp-filter.o sandbox-capsicum.o sandbox-pledge.o \
  	sandbox-solaris.o uidswap.o $(SKOBJS)
  
 +SSHPROXYOBJS=sshproxy.o proxyconf.o proxyauth.o ssh2.o switch-fixed.o filter-mitm.o $(SKOBJS)
 +
- SCP_OBJS=	scp.o progressmeter.o
+ SFTP_CLIENT_OBJS=sftp-common.o sftp-client.o sftp-glob.o
  
- SSHADD_OBJS=	ssh-add.o $(SKOBJS)
-@@ -187,6 +189,7 @@ all: configure-check $(CONFIGFILES) $(MANPAGES) $(TARGETS)
+ SCP_OBJS=	scp.o progressmeter.o $(SFTP_CLIENT_OBJS)
+@@ -190,6 +192,7 @@
  $(LIBSSH_OBJS): Makefile.in config.h
  $(SSHOBJS): Makefile.in config.h
  $(SSHDOBJS): Makefile.in config.h
 +$(SSHPROXYOBJS): Makefile.in config.h
  configure-check: $(srcdir)/configure
  
- $(srcdir)/configure: configure.ac aclocal.m4
-@@ -211,6 +214,9 @@ ssh$(EXEEXT): $(LIBCOMPAT) libssh.a $(SSHOBJS)
+ $(srcdir)/configure: configure.ac $(srcdir)/m4/*.m4
+@@ -214,6 +217,9 @@
  sshd$(EXEEXT): libssh.a	$(LIBCOMPAT) $(SSHDOBJS)
  	$(LD) -o $@ $(SSHDOBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS)
  

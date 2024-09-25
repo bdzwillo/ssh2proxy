@@ -9,7 +9,7 @@ using the api of the libssh.a provided by the openssh project.
 This allows the proxy code to stay in sync with openssh updates
 and bugfixes.
 
-The current version is built on top of openssh-8.2p1.
+The current version is built on top of openssh-8.9p1.
 
 The proxy supports ssh2 password & pubkey authentication.
 

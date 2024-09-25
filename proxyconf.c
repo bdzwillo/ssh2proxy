@@ -75,9 +75,9 @@ static void assemble_algorithms(struct ProxyOptions *options)
 	all_mac = mac_alg_list(',');
 	all_kex = kex_alg_list(',');
 	/* remove unsupported algos from default lists */
-	def_cipher = match_filter_whitelist(KEX_SERVER_ENCRYPT, all_cipher);
-	def_mac = match_filter_whitelist(KEX_SERVER_MAC, all_mac);
-	def_kex = match_filter_whitelist(KEX_SERVER_KEX, all_kex);
+	def_cipher = match_filter_allowlist(KEX_SERVER_ENCRYPT, all_cipher);
+	def_mac = match_filter_allowlist(KEX_SERVER_MAC, all_mac);
+	def_kex = match_filter_allowlist(KEX_SERVER_KEX, all_kex);
 #define ASSEMBLE(what, defaults, all) \
 	do { \
 		if ((r = kex_assemble_names(&options->what, defaults, all)) != 0) \
