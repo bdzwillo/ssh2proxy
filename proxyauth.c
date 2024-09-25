@@ -313,7 +313,13 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 	if (authctxt->method) {
 		free(authctxt->method);
 	}
-	authctxt->method = xstrdup(method);
+
+	int hostbound = strcmp(method, "publickey-hostbound-v00@openssh.com") == 0;
+	if (hostbound) {
+		authctxt->method = xstrdup("publickey");
+	} else {
+		authctxt->method = xstrdup(method);
+	}
 
 	if (strcmp(method, "none") == 0) {
 		if ((r = sshpkt_get_end(ssh)) != 0) {
@@ -358,7 +364,7 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 		free(devs);
 		free(lang);
 		authctxt->authenticated = 0;
-	} else if (strcmp(method, "publickey") == 0) {
+	} else if (hostbound || (strcmp(method, "publickey") == 0)) {
 		char *pkalg = NULL;
 		u_char *pkblob = NULL;
 		size_t blen, slen;
@@ -374,6 +380,28 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 		}
 		authctxt->have_sig = have_sig;
 
+		/* hostbound auth includes the hostkey offered at initial KEX */
+		if (hostbound) {
+			struct sshbuf *b = NULL;
+			struct sshkey *hostkey = NULL;
+
+			if ((r = sshpkt_getb_froms(ssh, &b)) != 0 ||
+			    (r = sshkey_fromb(b, &hostkey)) != 0) {
+				error("auth2: parse %s hostkey failed: %s", method, ssh_err(r));
+			}
+			if (ssh->kex->initial_hostkey == NULL) {
+				error("auth2: internal error: initial hostkey not recorded");
+				return SSH_ERR_INTERNAL_ERROR;
+			}
+			if (!sshkey_equal(hostkey, ssh->kex->initial_hostkey)) {
+				error("auth2: %s packet contained wrong host key", method);
+				return SSH_ERR_KEY_TYPE_MISMATCH;
+			}
+			sshbuf_free(b);
+			b = NULL;
+			sshkey_free(hostkey);
+			hostkey = NULL;
+		}
 		int pktype;
 		struct sshkey *key = NULL;
 
@@ -448,6 +476,11 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 			    (r = sshbuf_put_cstring(b, pkalg)) != 0 ||
 			    (r = sshbuf_put_string(b, pkblob, blen)) != 0) {
 				error("auth2: build packet failed: %s", ssh_err(r));
+				return r;
+			}
+			if (hostbound &&
+			    (r = sshkey_puts(ssh->kex->initial_hostkey, b)) != 0) {
+				error("auth2: reconstruct %s packet: %s", method, ssh_err(r));
 				return r;
 			}
 			if (Opt_debug) {
