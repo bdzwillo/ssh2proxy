@@ -292,6 +292,12 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 	if ((style = strchr(user, ':')) != NULL)
 		*style++ = 0;
 
+	if (authctxt->attempt >= 1024) {
+		error("maximum authentication attempts exceeded for user %s service %s method %s",
+			user, service, method);
+		ssh_packet_disconnect(ssh, "Too many authentication failures");
+		return SSH_ERR_INTERNAL_ERROR; /* not reached */
+	}
 	if (authctxt->attempt++ == 0) {
 		/* setup auth context */
 		authctxt->user = xstrdup(user);
