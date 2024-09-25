@@ -60,9 +60,12 @@ static int fixed_server_select(struct ssh *ssh, struct Authctxt *authctxt,
 			return 0;
 		}
 	}
-	server[0] = xstrdup(options.default_server);
-	*nserver = 1;
-	return 0;
+	if (options.default_server) {
+		server[0] = xstrdup(options.default_server);
+		*nserver = 1;
+		return 0;
+	}
+	return ENOENT;
 }
 
 struct Switchmethod switch_fixed = {
