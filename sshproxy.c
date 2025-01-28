@@ -1441,6 +1441,12 @@ static void proxy_child(int client_fd)
 static int server_dispatch(int so, struct sockaddr *saddr)
 {
 	pid_t pid;
+	sigset_t mask, omask;
+
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGTERM);
+	sigaddset(&mask, SIGQUIT);
+	sigaddset(&mask, SIGCHLD);
 
 	if (Opt_dont_fork) {
 #ifdef IGNORE_LB_MONITORING
@@ -1455,12 +1461,23 @@ static int server_dispatch(int so, struct sockaddr *saddr)
 #endif
 		pid = 0;
 	} else {
+		/* block signals so the child does not run handlers */
+		sigprocmask(SIG_BLOCK, &mask, &omask);
 		if ((pid = fork()) < 0) {
+			sigprocmask(SIG_SETMASK, &omask, NULL);
 			close(so);
 			return errno;
 		}
 	}
 	if (pid == 0) {
+		/* reset child sighandlers to allow kill */
+		signal(SIGTERM, SIG_DFL);
+		signal(SIGQUIT, SIG_DFL);
+		signal(SIGCHLD, SIG_DFL);
+
+		if (!Opt_dont_fork) {
+			sigprocmask(SIG_SETMASK, &omask, NULL);
+		}
 		close_listen_socks();
 
 		log_init(__progname, options.log_level, options.log_facility, log_stderr);
@@ -1474,6 +1491,8 @@ static int server_dispatch(int so, struct sockaddr *saddr)
 		proxy_child(so);
 		exit(0);
 	}
+	/* unblock parent sig handlers */
+	sigprocmask(SIG_SETMASK, &omask, NULL);
 	close(so);
 	return 0;
 }
