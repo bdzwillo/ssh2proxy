@@ -246,11 +246,11 @@ static void sigchld_handler(int sig)
 	sav_errno = errno;
 	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
 		if (WIFEXITED(status)) {
-			debug("child %d terminated with status %d", pid, WEXITSTATUS(status));
+			debug("child %ld terminated with status %d", (long)pid, WEXITSTATUS(status));
 		} else if (WIFSIGNALED(status)) {
-			debug("child %d terminated with signal %d", pid, WTERMSIG(status));
+			debug("child %ld terminated with signal %d", (long)pid, WTERMSIG(status));
 		} else {
-			debug("child %d other status %d", pid, status);
+			debug("child %ld other status %d", (long)pid, status);
 		}
 	}
 	signal(SIGCHLD, sigchld_handler);
