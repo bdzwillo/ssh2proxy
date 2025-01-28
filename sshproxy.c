@@ -387,7 +387,7 @@ static void proxy_init(const char *bindaddr, const char *default_port)
 
 	debug("proxy_init");
 
-	if (strlcpy(host, bindaddr, sizeof(host)) >= sizeof(host)) { 
+	if (strlcpy(host, bindaddr, sizeof(host)) >= sizeof(host)) {
 		fatal("bindaddr");
 	}
 	if ((p = strrchr(host,':'))) {
@@ -493,7 +493,7 @@ static void proxy_init(const char *bindaddr, const char *default_port)
 	ssh2_client_ctx = ctx;
 }
 
-/* 
+/*
  * Creates a socket for use as the ssh connection.
  */
 static int ssh_create_socket(struct addrinfo *ai, const char *bind_address)
@@ -526,7 +526,7 @@ static int ssh_create_socket(struct addrinfo *ai, const char *bind_address)
 			goto fail;
 		}
 		if (res == NULL) {
-			error("crate_socket: getaddrinfo: no addrs");
+			error("create_socket: getaddrinfo: no addrs");
 			goto fail;
 		}
 		memcpy(&bindaddr, res->ai_addr, res->ai_addrlen);
@@ -553,7 +553,7 @@ out:
 	return sock;
 }
 
-/* 
+/*
  * Opens a TCP/IP connection to the remote server on the given host.
  * The address of the remote host will be returned in hostaddr.
  */
@@ -645,7 +645,7 @@ int server_connect(struct Authctxt *authctxt, const char *name, const char *port
 	char *server = NULL;
 	char host[NI_MAXHOST];
 
-	if (strlcpy(host, name, sizeof(host)) >= sizeof(host)) { 
+	if (strlcpy(host, name, sizeof(host)) >= sizeof(host)) {
 		return EINVAL;
 	}
 	server = host;
@@ -749,7 +749,7 @@ static void handle_auth_request(struct Authctxt *authctxt, struct ssh *ssh_serve
 {
 	int r;
 
-	/* proxyauth_recv_request() has alread been called */
+	/* proxyauth_recv_request() has already been called */
 
 	debug("%s: handle_auth_request state=%d, authenticated=%d",
 		authctxt->id, authctxt->state, authctxt->authenticated);
@@ -922,7 +922,7 @@ static void proxy_child2(struct Authctxt *authctxt, struct ssh *ssh_client)
 	char *serverlist[maxserver];
 
 	if ((cp = sshbuf_dup_string(ssh_client->kex->client_version)) == NULL) {
-		fatal("%s: malloc", authctxt->id);
+		fatal("%s: sshbuf_dup_string", authctxt->id);
 	}
 
 	/* Perform client key exchange. */
@@ -961,7 +961,7 @@ static void proxy_child2(struct Authctxt *authctxt, struct ssh *ssh_client)
 	/* Perform server key exchange. */
 	debug("%s: Performing server key exchange", authctxt->id);
 	if ((ssh_server_ctx = SSH2_CTX_new()) == NULL) {
-		fatal("%s: malloc", authctxt->id);
+		fatal("%s: SSH2_CTX_new", authctxt->id);
 	}
 	/* setup public keys for backend verification
 	 * (these are currently the same as for the client side)
@@ -975,7 +975,7 @@ static void proxy_child2(struct Authctxt *authctxt, struct ssh *ssh_client)
 	}
 
 	if ((ssh_server = ssh2_new(ssh_server_ctx, 0, NULL)) == NULL) {
-		fatal("%s: malloc", authctxt->id);
+		fatal("%s: ssh2_new server", authctxt->id);
 	}
 	ssh2_set_fd(ssh_server, server_fd);
 	authctxt->ssh_server = ssh_server;
@@ -995,13 +995,13 @@ static void proxy_child2(struct Authctxt *authctxt, struct ssh *ssh_client)
 		fatal("%s: server read banner failed: %s", authctxt->id, ssh_err(r));
 	}
 	if ((sp = sshbuf_dup_string(ssh_server->kex->server_version)) == NULL) {
-		fatal("%s: malloc", authctxt->id);
+		fatal("%s: sshbuf_dup_string", authctxt->id);
 	}
 	debug("%s: server version: %s compat: %08x", authctxt->id, sp, ssh_server->compat);
 	free(sp);
 
 	if ((r = ssh_order_hostkeyalgs(ssh_server)) != 0) {
-		fatal("%s: server order hostkeyags failed: %s", authctxt->id, ssh_err(r));
+		fatal("%s: server order hostkeyalgs failed: %s", authctxt->id, ssh_err(r));
 	}
 
 	/* use always our own proposal (and not ssh_client->peer_proposal) for
@@ -1390,7 +1390,7 @@ static void proxy_child(int client_fd)
 		fatal("fcntl");
 	}
 	if ((ssh_client = ssh2_new(ssh2_client_ctx, 1, ssh2_server_proposal)) == NULL) {
-		fatal("malloc");
+		fatal("ssh2_new client");
 	}
 	ssh2_set_fd(ssh_client, client_fd);
 
@@ -1403,7 +1403,7 @@ static void proxy_child(int client_fd)
 
 	//dump_hostkey_proposal(ssh_client, "orig");
 	if ((r = ssh_order_hostkeyalgs(ssh_client)) != 0) {
-		fatal("%s: client order hostkeyags failed: %s", ssh_remote_ipaddr(ssh_client), ssh_err(r));
+		fatal("%s: client order hostkeyalgs failed: %s", ssh_remote_ipaddr(ssh_client), ssh_err(r));
 	}
 	//dump_hostkey_proposal(ssh_client, "order");
 
@@ -1430,7 +1430,7 @@ static void proxy_child(int client_fd)
 	}
 	if (Opt_debug) {
 		if ((cp = sshbuf_dup_string(ssh_client->kex->client_version)) == NULL) {
-			fatal("malloc");
+			fatal("sshbuf_dup_string");
 		}
 		debug("client %s:%d version: %s compat: %08x", ssh_remote_ipaddr(ssh_client), ssh_remote_port(ssh_client), cp, ssh_client->compat);
 		free(cp);
@@ -1636,7 +1636,7 @@ int main(int argc, char *argv[])
 	if (options.switch_methods) {
 		int i, len;
 		char *p, *s;
-		
+
 		for (s = options.switch_methods; s != NULL; s = p+1) {
 			if ((p = strchr(s, ','))) {
 				len = p-s;

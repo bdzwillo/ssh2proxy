@@ -204,7 +204,7 @@ void ssh2_free(struct ssh *ssh)
  *
  * - might test via:
  *   'ssh -o RekeyLimit="100k 5s" user@host'
- *   (new KEXINIT from client after 100k datatransder or 5 seconds):
+ *   (new KEXINIT from client after 100k data transfer or 5 seconds):
  *
  * - libssh defaults are rekey_interval=0 & rekey_time=0 (disabled)
  */
