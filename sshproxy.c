@@ -905,6 +905,51 @@ out:
 	return r;
 }
 
+static int ssh2_read_banner(struct ssh *ssh, struct sshbuf *banner)
+{
+	struct sshbuf *input = ssh_packet_get_input(ssh);
+	int need_more_data = sshbuf_len(input) == 0;
+	int fd = ssh_packet_get_connection_in(ssh);
+	fd_set fds;
+	struct timeval timeout = {60, 0}; /* 1 min */
+	int r;
+	size_t input_len;
+
+	/*
+	 * wrapper for _ssh_read_banner()
+	 * - _ssh_read_banner() returns 0 on success and on 'not enough input'
+	 * - to distinguish check if something was taken out of input
+	 * - read more and retry on 'not enough input'
+	 */
+	while (1) {
+		if (need_more_data) {
+			FD_ZERO(&fds);
+			FD_SET(fd, &fds);
+			if (select(fd + 1, &fds, 0, 0, &timeout) == -1) {
+				if (errno == EINTR) {
+					continue;
+				}
+				fatal("%s: select() failed while waiting for banner: %s",
+					ssh_remote_ipaddr(ssh), strerror(errno));
+			}
+			if (!FD_ISSET(fd, &fds)) { /* timeout */
+				return SSH_ERR_NO_PROTOCOL_VERSION;
+			}
+			if ((r = ssh2_read_append(ssh)) != 0) {
+				return r;
+			}
+		}
+		input_len = sshbuf_len(input);
+		if ((r = _ssh_read_banner(ssh, banner)) != 0) {
+			return r;
+		}
+		if (input_len != sshbuf_len(input)) {
+			return 0;
+		}
+		need_more_data = 1;
+	}
+}
+
 static void proxy_child2(struct Authctxt *authctxt, struct ssh *ssh_client)
 {
 	int r;
@@ -988,10 +1033,7 @@ static void proxy_child2(struct Authctxt *authctxt, struct ssh *ssh_client)
 	if ((r = ssh_packet_write_wait(ssh_client)) != 0) {
 		fatal("%s: server write banner failed: %s", authctxt->id, ssh_err(r));
 	}
-	if ((r = ssh2_read_append(ssh_server)) != 0) {
-    		fatal("%s: server recv banner failed: %s", authctxt->id, ssh_err(r));
-	}
-	if ((r = _ssh_read_banner(ssh_server, ssh_server->kex->server_version)) != 0) {
+	if ((r = ssh2_read_banner(ssh_server, ssh_server->kex->server_version)) != 0) {
 		fatal("%s: server read banner failed: %s", authctxt->id, ssh_err(r));
 	}
 	if ((sp = sshbuf_dup_string(ssh_server->kex->server_version)) == NULL) {
@@ -1413,16 +1455,11 @@ static void proxy_child(int client_fd)
 	if ((r = ssh_packet_write_wait(ssh_client)) != 0) {
 		fatal("%s: server write banner failed: %s", ssh_remote_ipaddr(ssh_client), ssh_err(r));
 	}
-	if ((r = ssh2_read_append(ssh_client)) != 0) {
+	if ((r = ssh2_read_banner(ssh_client, ssh_client->kex->client_version)) != 0) {
 		if (r == SSH_ERR_CONN_CLOSED) {
 			debug("%s: client connection closed", ssh_remote_ipaddr(ssh_client));
 			exit(1);
-		} else {
-	    		fatal("%s: client recv banner failed: %s", ssh_remote_ipaddr(ssh_client), ssh_err(r));
-		}
-	}
-	if ((r = _ssh_read_banner(ssh_client, ssh_client->kex->client_version)) != 0) {
-		if (r == SSH_ERR_PROTOCOL_MISMATCH) {
+		} else if (r == SSH_ERR_PROTOCOL_MISMATCH) {
 			fatal("%s: client protocol mismatch", ssh_remote_ipaddr(ssh_client));
 		} else {
 			fatal("%s: client read banner failed: %s", ssh_remote_ipaddr(ssh_client), ssh_err(r));
