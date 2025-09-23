@@ -82,7 +82,10 @@ int proxyauth_send_features(struct ssh *ssh, struct Authctxt *authctxt)
 	if (!authctxt->server_methods) {
 		return SSH_ERR_INTERNAL_ERROR;
 	}
-	strlcpy(server, authctxt->server_methods, sizeof(server));
+	if (strlcpy(server, authctxt->server_methods, sizeof(server)) >= sizeof(server)) {
+		error("auth_send_features: server methods too long: %s", authctxt->server_methods);
+		return SSH_ERR_NO_BUFFER_SPACE;
+	}
 	mp = server;
 	client[0] = '\0';
 
@@ -94,7 +97,10 @@ int proxyauth_send_features(struct ssh *ssh, struct Authctxt *authctxt)
 		if (client[0] != '\0') {
 			strlcat(client, ",", sizeof(client));
 		}
-		strlcat(client, p, sizeof(client));
+		if (strlcat(client, p, sizeof(client)) >= sizeof(client)) {
+			error("auth_send_features: client methods too long: %s", authctxt->server_methods);
+			return SSH_ERR_NO_BUFFER_SPACE;
+		}
 	}
 	debug("methods server: %s client: %s",
 			authctxt->server_methods, client);
