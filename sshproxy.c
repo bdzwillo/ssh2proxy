@@ -209,6 +209,10 @@ static void authctxt_finit(struct Authctxt *authctxt)
 	}
 	free(authctxt->style);
 	authctxt->style = NULL;
+	if (authctxt->passwd) {
+		freezero(authctxt->passwd, strlen(authctxt->passwd));
+		authctxt->passwd = NULL;
+	}
 }
 
 static int server_select(struct ssh *ssh, struct Authctxt *authctxt,

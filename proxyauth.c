@@ -363,12 +363,19 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 			goto done;
 		}
 		if (change) {
+			/* like openssh userauth_passwd: password change is
+			 * not supported, reject without authenticating
+			 */
 			error("password change not supported");
+			freezero(password, len);
+			authctxt->authenticated = 0;
+		} else {
+			/* proxy forwards password to the backend.
+			 * it is scrubbed in authctxt_finit.
+			 */
+			authctxt->passwd = password;
+			authctxt->authenticated = 1;
 		}
-		authctxt->passwd = password;
-		//explicit_bzero(password, len);
-		//free(password);
-		authctxt->authenticated = 1;
 	} else if (strcmp(method, "keyboard-interactive") == 0) {
 		char *lang, *devs;
 
