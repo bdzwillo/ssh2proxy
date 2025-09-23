@@ -268,10 +268,31 @@ static void dump_base64(FILE *fp, const u_char *buf, size_t len)
 	free(b64);
 }
 
+/* Parse a client SSH2_MSG_USERAUTH_REQUEST into authctxt.
+ *
+ * The proxy design keeps the upstream's wire parsing + signature verification
+ * intact and the entire local authorization/policy layer is stripped.
+ * It proves the client owns the key, then lets the backend decide whether that
+ * key (or password) is actually allowed.
+ *
+ * see: input_userauth_request() (auth2.c)
+ * see: publickey branch of userauth_pubkey() (auth2-pubkey.c)
+ *
+ * Differences:
+ * - parse errors are returned at 'done', instead of fatal_fr()
+ * - proxy has no local user db: authctxt->valid is unused and user_key_allowed()
+ *   is omitted (key authorisation is delegated to the backend)
+ * - the decoded key is kept in authctxt->key (sshkey_free() just on error)
+ */
 int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 {
 	char *user = NULL, *service = NULL, *method = NULL, *style = NULL;
-	int r;
+	struct sshbuf *b = NULL;
+	struct sshkey *key = NULL, *hostkey = NULL;
+	char *pkalg = NULL, *userstyle = NULL, *key_s = NULL, *ca_s = NULL;
+	u_char *pkblob = NULL, *sig = NULL;
+	struct sshkey_sig_details *sig_details = NULL;
+	int r = 0;
 
 	if (authctxt == NULL) {
 		error("input_userauth_request: no authctxt");
@@ -280,10 +301,7 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 	if ((r = sshpkt_get_cstring(ssh, &user, NULL)) != 0 ||
 	    (r = sshpkt_get_cstring(ssh, &service, NULL)) != 0 ||
 	    (r = sshpkt_get_cstring(ssh, &method, NULL)) != 0) {
-		free(service);
-		free(user);
-		free(method);
-		return r;
+		goto done;
 	}
 	debug("userauth-request for user %s service %s method %s",
 		user, service, method);
@@ -329,7 +347,7 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 	if (strcmp(method, "none") == 0) {
 		if ((r = sshpkt_get_end(ssh)) != 0) {
 			error("auth2: none: %s", ssh_err(r));
-			return r;
+			goto done;
 		}
 		authctxt->authenticated = 0;
 	} else if (strcmp(method, "password") == 0) {
@@ -342,7 +360,7 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 		    (change && (r = sshpkt_get_cstring(ssh, NULL, NULL)) != 0) ||
 		    (r = sshpkt_get_end(ssh)) != 0) {
 			error("auth2: password: %s", ssh_err(r));
-			return r;
+			goto done;
 		}
 		if (change) {
 			error("password change not supported");
@@ -358,7 +376,9 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 		    (r = sshpkt_get_cstring(ssh, &devs, NULL)) != 0 ||
 		    (r = sshpkt_get_end(ssh)) != 0) {
 			error("auth2: keyboard-interactive: %s", ssh_err(r));
-			return r;
+			free(devs);
+			free(lang);
+			goto done;
 		}
 		/* some clients like libssh-0.2 send keyboard-interactive
 		 * requests even if the support was not signaled from the
@@ -370,10 +390,9 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 		free(lang);
 		authctxt->authenticated = 0;
 	} else if (hostbound || (strcmp(method, "publickey") == 0)) {
-		char *pkalg = NULL;
-		u_char *pkblob = NULL;
 		size_t blen, slen;
 		u_char have_sig;
+		int pktype;
 
 		authctxt->authenticated = 0;
 
@@ -381,65 +400,61 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 		    (r = sshpkt_get_cstring(ssh, &pkalg, NULL)) != 0 ||
 		    (r = sshpkt_get_string(ssh, &pkblob, &blen)) != 0) {
 			error("auth2: parse request failed: %s", ssh_err(r));
-			return r;
+			goto done;
 		}
 		authctxt->have_sig = have_sig;
 
 		/* hostbound auth includes the hostkey offered at initial KEX */
 		if (hostbound) {
-			struct sshbuf *b = NULL;
-			struct sshkey *hostkey = NULL;
-
 			if ((r = sshpkt_getb_froms(ssh, &b)) != 0 ||
 			    (r = sshkey_fromb(b, &hostkey)) != 0) {
 				error("auth2: parse %s hostkey failed: %s", method, ssh_err(r));
-				sshbuf_free(b);
-				return r;
+				goto done;
 			}
 			if (ssh->kex->initial_hostkey == NULL) {
 				error("auth2: internal error: initial hostkey not recorded");
-				return SSH_ERR_INTERNAL_ERROR;
+				r = SSH_ERR_INTERNAL_ERROR;
+				goto done;
 			}
 			if (!sshkey_equal(hostkey, ssh->kex->initial_hostkey)) {
 				error("auth2: %s packet contained wrong host key", method);
-				return SSH_ERR_KEY_TYPE_MISMATCH;
+				r = SSH_ERR_KEY_TYPE_MISMATCH;
+				goto done;
 			}
 			sshbuf_free(b);
 			b = NULL;
-			sshkey_free(hostkey);
-			hostkey = NULL;
 		}
-		int pktype;
-		struct sshkey *key = NULL;
 
 		pktype = sshkey_type_from_name(pkalg);
 		if (pktype == KEY_UNSPEC) {
 			/* this is perfectly legal */
 			error("auth2: unsupported public key algorithm: %s", pkalg);
-			return SSH_ERR_INTERNAL_ERROR;
+			r = SSH_ERR_INTERNAL_ERROR;
+			goto done;
 		}
 		if ((r = sshkey_from_blob(pkblob, blen, &key)) != 0) {
 			error("auth2: could not parse key: %s", ssh_err(r));
-			return r;
+			goto done;
 		}
 		if (key->type != pktype) {
 			error("auth2: type mismatch for decoded key (received %d, expected %d)", key->type, pktype);
-			return SSH_ERR_KEY_TYPE_MISMATCH;
+			r = SSH_ERR_KEY_TYPE_MISMATCH;
+			goto done;
 		}
 		if (authctxt->key) {
 		    sshkey_free(authctxt->key);
 		}
+		/* key ownership moves to authctxt here; it is not freed at
+		 * 'done:' (unlike upstream), but on the error paths above
+		 */
 		authctxt->key = key;
+		key = NULL;
 
 		if (authctxt->key != NULL) {
 		    if(authctxt->have_sig) {
-			char *userstyle = NULL, *key_s = NULL, *ca_s = NULL;
-			u_char *sig = NULL;
-			struct sshkey_sig_details *sig_details = NULL;
-
-			key_s = format_key(key);
-			if (sshkey_is_cert(key))
-				ca_s = format_key(key->cert->signature_key);
+			key_s = format_key(authctxt->key);
+			if (sshkey_is_cert(authctxt->key))
+				ca_s = format_key(authctxt->key->cert->signature_key);
 
 			debug("auth2: have %s signature for %s%s%s", pkalg, key_s,
 			    ca_s == NULL ? "" : " CA ",
@@ -448,23 +463,22 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 			if ((r = sshpkt_get_string(ssh, &sig, &slen)) != 0 ||
 			    (r = sshpkt_get_end(ssh)) != 0) {
 				error("auth2: get sig %s", ssh_err(r));
-				return r;
+				goto done;
 			}
-			struct sshbuf *b = NULL;
-
 			if ((b = sshbuf_new()) == NULL) {
 				error("auth2: sshbuf_new failed");
-				return SSH_ERR_ALLOC_FAIL;
+				r = SSH_ERR_ALLOC_FAIL;
+				goto done;
 			}
 			if (ssh->compat & SSH_OLD_SESSIONID) {
 				if ((r = sshbuf_putb(b, ssh->kex->session_id)) != 0) {
 					error("auth2: sshbuf_put session id: %s", ssh_err(r));
-					return r;
+					goto done;
 				}
 			} else {
 				if ((r = sshbuf_put_stringb(b, ssh->kex->session_id)) != 0) {
 					error("auth2: sshbuf_put_string session id: %s", ssh_err(r));
-					return r;
+					goto done;
 				}
 			}
 			/* reconstruct packet */
@@ -479,19 +493,19 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 			    (r = sshbuf_put_cstring(b, pkalg)) != 0 ||
 			    (r = sshbuf_put_string(b, pkblob, blen)) != 0) {
 				error("auth2: build packet failed: %s", ssh_err(r));
-				return r;
+				goto done;
 			}
 			if (hostbound &&
 			    (r = sshkey_puts(ssh->kex->initial_hostkey, b)) != 0) {
 				error("auth2: reconstruct %s packet: %s", method, ssh_err(r));
-				return r;
+				goto done;
 			}
 			if (Opt_debug) {
 				sshbuf_dump(b, stderr);
 			}
 			/* test for correct signature */
 			authctxt->authenticated = 0;
-			if (sshkey_verify(key, sig, slen,
+			if (sshkey_verify(authctxt->key, sig, slen,
 			    sshbuf_ptr(b), sshbuf_len(b),
 			    (ssh->compat & SSH_BUG_SIGTYPE) == 0 ? pkalg : NULL,
 			    ssh->compat, &sig_details) == 0) {
@@ -500,13 +514,6 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 			} else {
 				error("pubkey: %s key_verify failed", pkalg);
 			}
-			sshbuf_free(b);
-			//sshauthopt_free(authopts);
-			free(userstyle);
-			free(key_s);
-			free(ca_s);
-			free(sig);
-			sshkey_sig_details_free(sig_details);
 		    }
 		}
 		if (authctxt->key != NULL) {
@@ -517,8 +524,6 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 		if (Opt_debug) {
 			dump_base64(stderr, pkblob, blen);
 		}
-		free(pkalg);
-		free(pkblob);
 	} else {
 		/* the request will be forwarded to the server side
 		 * and result in a failure message to the client
@@ -526,13 +531,22 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 		error("unsupported auth method: %s", method);
 
 		authctxt->authenticated = 0;
-		goto unsupported;
 	}
-unsupported:
+done:
 	free(service);
 	free(user);
 	free(method);
-	return 0;
+	sshbuf_free(b);
+	sshkey_free(key);
+	sshkey_free(hostkey);
+	free(userstyle);
+	free(pkalg);
+	free(pkblob);
+	free(key_s);
+	free(ca_s);
+	free(sig);
+	sshkey_sig_details_free(sig_details);
+	return r;
 }
 
 int proxyauth_recv_auth_pkg(struct ssh *ssh, struct Authctxt *authctxt, struct sshbuf **auth_sbp)
