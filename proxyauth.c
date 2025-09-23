@@ -289,6 +289,9 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 		user, service, method);
 	debug("attempt %d failures %d", authctxt->attempt, authctxt->failures);
 
+	/* split off any 'user:style' BSD-auth login.conf(5) suffix; only kept to
+	 * rebuild the signed username below, not honored or forwarded
+	 */
 	if ((style = strchr(user, ':')) != NULL)
 		*style++ = 0;
 
@@ -302,6 +305,9 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 		/* setup auth context (no local user db, so no getpwnamallow/valid) */
 		authctxt->user = xstrdup(user);
 		authctxt->service = xstrdup(service);
+		if (style != NULL) {
+			authctxt->style = xstrdup(style);
+		}
 	} else if (strcmp(user, authctxt->user) != 0 ||
 	    strcmp(service, authctxt->service) != 0) {
 		/* client must not change identity mid-conversation */

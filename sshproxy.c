@@ -207,6 +207,8 @@ static void authctxt_finit(struct Authctxt *authctxt)
 		sshkey_free(authctxt->key);
 		authctxt->key = NULL;
 	}
+	free(authctxt->style);
+	authctxt->style = NULL;
 }
 
 static int server_select(struct ssh *ssh, struct Authctxt *authctxt,
