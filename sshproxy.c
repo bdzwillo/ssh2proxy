@@ -201,18 +201,28 @@ static void authctxt_init(struct Authctxt *authctxt)
 	memset(authctxt, 0, sizeof(*authctxt));
 }
 
+static void cfree(char **p)
+{
+	free(*p);
+	*p = NULL;
+}
+
 static void authctxt_finit(struct Authctxt *authctxt)
 {
 	if (authctxt->key) {
 		sshkey_free(authctxt->key);
 		authctxt->key = NULL;
 	}
-	free(authctxt->style);
-	authctxt->style = NULL;
+	cfree(&authctxt->user);
+	cfree(&authctxt->style);
 	if (authctxt->passwd) {
 		freezero(authctxt->passwd, strlen(authctxt->passwd));
 		authctxt->passwd = NULL;
 	}
+	cfree(&authctxt->service);
+	cfree(&authctxt->method);
+	cfree(&authctxt->server_methods);
+	cfree(&authctxt->server_user);
 }
 
 static int server_select(struct ssh *ssh, struct Authctxt *authctxt,

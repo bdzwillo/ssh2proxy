@@ -225,6 +225,8 @@ int proxyauth_recv_failure(struct ssh *ssh, struct Authctxt *authctxt)
 		error("auth_recv_failure: decode failed");
 		return r;
 	}
+	/* free any list from a previous failure before overwriting */
+	free(authctxt->server_methods);
 	authctxt->server_methods = authlist;
 	return 0;
 }
