@@ -299,16 +299,15 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 		return SSH_ERR_INTERNAL_ERROR; /* not reached */
 	}
 	if (authctxt->attempt++ == 0) {
-		/* setup auth context */
+		/* setup auth context (no local user db, so no getpwnamallow/valid) */
 		authctxt->user = xstrdup(user);
 		authctxt->service = xstrdup(service);
-	} else if (authctxt->valid) {
-		if (strcmp(user, authctxt->user) != 0 ||
-		    strcmp(service, authctxt->service) != 0) {
-			error("input_userauth_request: mismatch: (%s,%s)!=(%s,%s)",
-			    user, service, authctxt->user, authctxt->service);
-			authctxt->valid = 0;
-		}
+	} else if (strcmp(user, authctxt->user) != 0 ||
+	    strcmp(service, authctxt->service) != 0) {
+		/* client must not change identity mid-conversation */
+		error("input_userauth_request: mismatch: (%s,%s)!=(%s,%s)",
+		    user, service, authctxt->user, authctxt->service);
+		ssh_packet_disconnect(ssh, "Change of username or service not allowed");
 	}
 	if (authctxt->method) {
 		free(authctxt->method);
@@ -462,10 +461,6 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 					return r;
 				}
 			}
-			//if (!authctxt->valid || authctxt->user == NULL) {
-			//	error("auth2: disabled because of invalid user");
-			//	return -1;
-			//}
 			/* reconstruct packet */
 			xasprintf(&userstyle, "%s%s%s", authctxt->user,
 			    authctxt->style ? ":" : "",
@@ -490,10 +485,6 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 			}
 			/* test for correct signature */
 			authctxt->authenticated = 0;
-			//if (!user_key_allowed(ssh, pw, key, 1, &authopts) {
-			//	error("auth2: pubkey not allowed");
-			//	return -1;
-			//}
 			if (sshkey_verify(key, sig, slen,
 			    sshbuf_ptr(b), sshbuf_len(b),
 			    (ssh->compat & SSH_BUG_SIGTYPE) == 0 ? pkalg : NULL,
