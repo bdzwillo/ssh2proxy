@@ -313,7 +313,7 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 	}
 	debug("userauth-request for user %s service %s method %s",
 		user, service, method);
-	debug("attempt %d failures %d", authctxt->attempt, authctxt->failures);
+	debug("attempt %d", authctxt->attempt);
 
 	/* split off any 'user:style' BSD-auth login.conf(5) suffix; only kept to
 	 * rebuild the signed username below, not honored or forwarded

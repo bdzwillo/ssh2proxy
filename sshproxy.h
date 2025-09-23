@@ -47,7 +47,6 @@ struct Authctxt {
 	int success;
 	int valid;
 	int attempt;
-	int failures;
 	int authenticated;
 	char *user;
 	char *passwd;
