@@ -388,6 +388,8 @@ int proxyauth_recv_request(struct ssh *ssh, struct Authctxt *authctxt)
 			if ((r = sshpkt_getb_froms(ssh, &b)) != 0 ||
 			    (r = sshkey_fromb(b, &hostkey)) != 0) {
 				error("auth2: parse %s hostkey failed: %s", method, ssh_err(r));
+				sshbuf_free(b);
+				return r;
 			}
 			if (ssh->kex->initial_hostkey == NULL) {
 				error("auth2: internal error: initial hostkey not recorded");
