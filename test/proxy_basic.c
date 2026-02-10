@@ -5,9 +5,10 @@
  * test_*() runs a real proxy on a loopback high port and probes it with the
  * build-tree ssh tools.
  *
- *   test_hostkey()  - proxy comes up and presents its configured hostkey
- *   test_switch()   - the "fixed" switch routes a client by username
- *   test_badconf()  - a bad config makes the proxy exit instead of serving
+ *   test_hostkey()      - proxy comes up and presents its configured hostkey
+ *   test_hostkey_rsa()  - RSA hostkey: only rsa-sha2, pre-7.2 client rejected
+ *   test_switch()       - the "fixed" switch routes a client by username
+ *   test_badconf()      - a bad config makes the proxy exit instead of serving
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -113,6 +114,97 @@ static void test_hostkey(const struct proxy_env *e)
 		fprintf(stderr, "# scan='%s'\n# cfg ='%s'\n", scankey, cfgkey);
 		file_dump(log, "proxy.log");
 	}
+	reap_pg(proxy_pid, 50);
+}
+
+/* test_hostkey_rsa (2 tests): the proxy serves an RSA hostkey, offering only
+ * rsa-sha2 for it (upstream's default since 8.8).
+ *
+ * - a modern client negotiates the hostkey via rsa-sha2
+ * - a pre-OpenSSH-7.2 client (only ssh-rsa for host keys) is rejected
+ */
+static void test_hostkey_rsa(const struct proxy_env *e)
+{
+	char tmp[256], cfg[PATH_MAX], log[PATH_MAX], hostkey[PATH_MAX];
+	char pubfile[PATH_MAX + 4], scanfile[PATH_MAX], errfile[PATH_MAX];
+	char cfgkey[8192], scankey[8192], portarg[16], out[8192];
+	int port;
+	pid_t proxy_pid;
+
+	if (make_tmpdir("proxy_hostkey_rsa", tmp, sizeof(tmp)) != 0 ||
+	    ssh_gen_key_type(&e->tool,
+		hostkey_path(tmp, hostkey, sizeof(hostkey)), "rsa", 2048) != 0) {
+		tap_skip(2, "hostkey_rsa: setup failed (tmpdir + keygen)");
+		return;
+	}
+	snprintf(cfg, sizeof(cfg), "%s/sshproxy.conf", tmp);
+	snprintf(log, sizeof(log), "%s/proxy.log", tmp);
+	snprintf(scanfile, sizeof(scanfile), "%s/scan.out", tmp);
+	snprintf(errfile, sizeof(errfile), "%s/ssh.err", tmp);
+	snprintf(pubfile, sizeof(pubfile), "%s.pub", hostkey);
+
+	port = pick_free_port();
+	if (file_writef(cfg,
+	    "bindaddr = 127.0.0.1:%d\n"
+	    "hostkey = %s\n"
+	    "switch_methods = fixed\n"
+	    "default_server = 127.0.0.1:1\n",
+	    port, hostkey) != 0) {
+		tap_skip(2, "hostkey_rsa: write config failed");
+		return;
+	}
+
+	proxy_pid = proxy_spawn(e, cfg, log);
+	if (proxy_pid <= 0 || wait_for_listen(port, 5000) != 0) {
+		file_dump(log, "proxy.log");
+		tap_skip(2, "hostkey_rsa: proxy down");
+		reap_pg(proxy_pid, 50);
+		return;
+	}
+
+	snprintf(portarg, sizeof(portarg), "%d", port);
+
+	/* a modern client (rsa-sha2 host-key algs) fetches the RSA hostkey */
+	{
+		char *scanargv[] = {
+			(char *)e->tool.keyscan, "-t", "rsa", "-p", portarg,
+			"127.0.0.1", NULL
+		};
+		run_capture(scanargv, 0, out, sizeof(out));
+		file_write_str(scanfile, out);
+	}
+	if (read_field(scanfile, 3, scankey, sizeof(scankey)) != 0 ||
+	    read_field(pubfile, 2, cfgkey, sizeof(cfgkey)) != 0) {
+		scankey[0] = cfgkey[0] = '\0';
+	}
+	if (!tap_ok(scankey[0] != '\0' && strcmp(scankey, cfgkey) == 0,
+	    "hostkey_rsa: modern client negotiates the RSA hostkey via rsa-sha2")) {
+		fprintf(stderr, "# scan='%s'\n# cfg ='%s'\n", scankey, cfgkey);
+		file_dump(log, "proxy.log");
+	}
+
+	/* a pre-7.2 client (only ssh-rsa for host keys) cannot: the proxy offers
+	 * only rsa-sha2 for the RSA key, so host-key negotiation fails outright
+	 */
+	{
+		char *oldargv[] = {
+			(char *)e->tool.ssh, "-F", "/dev/null",
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "UserKnownHostsFile=/dev/null",
+			"-o", "GlobalKnownHostsFile=/dev/null",
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=5",
+			"-o", "HostKeyAlgorithms=ssh-rsa",
+			"-o", "PreferredAuthentications=publickey",
+			"-p", portarg, "old@127.0.0.1", "true", NULL
+		};
+		run_capture_e(oldargv, 0, out, sizeof(out), errfile);
+	}
+	if (!tap_ok(file_contains(errfile, "no matching host key type"),
+	    "hostkey_rsa: pre-7.2 ssh-rsa-only client is rejected")) {
+		file_dump(errfile, "ssh.err");
+	}
+
 	reap_pg(proxy_pid, 50);
 }
 
@@ -258,11 +350,12 @@ int main(int argc, char **argv)
 	struct proxy_env env;
 
 	(void)argc;
-	tap_plan(7);
+	tap_plan(9);
 
 	proxy_resolve_paths(&env, argv[0]);
 
 	test_hostkey(&env);
+	test_hostkey_rsa(&env);
 	test_switch(&env);
 	test_badconf(&env);
 
