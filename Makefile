@@ -64,7 +64,38 @@ sshproxy: $(OPENSSH)
 	(cd $(OPENSSH) && \
 		make sshproxy)
 
+# Unprivileged integration tests against the freshly-built sshproxy (see test/).
+TEST_BINS = test/proxy_basic test/proxy_password test/proxy_pubkey
+
+test/proxy_basic: test/proxy_basic.c test/proxy_test.h test/ssh_test.h test/util.h test/tap.h
+	gcc -g -Wall $< -o $@
+
+# password/pubkey also do a full login via a real backend sshd; -lcrypt for it
+test/proxy_password: test/proxy_password.c test/proxy_test.h test/ssh_test.h test/util.h test/chroot_ns.h test/tap.h test/setgroups_stub.so
+	gcc -g -Wall $< -o $@ -lcrypt
+
+test/proxy_pubkey: test/proxy_pubkey.c test/proxy_test.h test/ssh_test.h test/util.h test/chroot_ns.h test/tap.h test/setgroups_stub.so
+	gcc -g -Wall $< -o $@
+
+test/setgroups_stub.so: test/setgroups_stub.c
+	gcc -shared -fPIC $< -o $@
+
+# repoint the openssh symlink at $(OPENSSH) so tests run the freshly-built sshd
+.PHONY: openssh
+openssh:
+	ln -sfn $(OPENSSH) openssh
+
+# the tests run ssh/ssh-keygen/ssh-keyscan/sshd as well as sshproxy
+test-tools: sshproxy openssh
+	(cd $(OPENSSH) && make ssh ssh-keygen ssh-keyscan sshd)
+
+# tests resolve tools by path ($SSHPROXY/$SSH/$KEYGEN/$KEYSCAN override); each
+# keeps a /tmp/<name>.<pid> work dir for inspection
+test: test-tools $(TEST_BINS)
+	prove --exec '' $(TEST_BINS)
+
 clean:
 	( cd $(OPENSSH) && \
 		make clean)
+	rm -f openssh
 

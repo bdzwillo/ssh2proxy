@@ -1,0 +1,4 @@
+/proxy_basic
+/proxy_password
+/proxy_pubkey
+/setgroups_stub.so
