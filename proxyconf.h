@@ -56,6 +56,7 @@ struct ProxyOptions {
 	struct target *switch_targets;  /* list of user targets for fixed switch */
 	u_int	num_switch_targets;
 	int 	filter_mitm;
+	int 	legacy_rsa_hostkey;	/* offer ssh-rsa hostkey alg to pre-7.2 clients */
 };
 
 void proxy_options_init(struct ProxyOptions *options);

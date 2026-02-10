@@ -236,6 +236,8 @@ int config_read(const char *name, struct ProxyOptions *options)
 			if (!options->local_port) {
 				options->local_port = val;
 			}
+		} else if (match(key, "legacy_rsa_hostkey")) {
+			options->legacy_rsa_hostkey = 1;
 		} else {
 			debug("ignore config option: %s = %s", key, val);
 		}

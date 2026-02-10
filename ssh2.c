@@ -141,6 +141,18 @@ struct ssh *ssh2_new(SSH2_CTX *ctx, int is_server, char **proposal)
 	myproposal[PROPOSAL_ENC_ALGS_STOC] = options.ciphers;
 	myproposal[PROPOSAL_MAC_ALGS_CTOS] = myproposal[PROPOSAL_MAC_ALGS_STOC] = options.macs;
 
+	/* legacy_rsa_hostkey: append ssh-rsa (SHA-1) to the server host-key algorithms
+	 *   - lets a pre-OpenSSH-7.2 client verify an RSA proxy hostkey
+	 *   - off by default, since ssh-rsa is weak (legacy clients only)
+	 */
+	if (is_server && options.legacy_rsa_hostkey) {
+		char *algs = kex_names_cat(myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS], "ssh-rsa");
+		if (algs == NULL) {
+			fatal("%s: cat ssh-rsa hostkey alg failed", __func__);
+		}
+		myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS] = algs;
+	}
+
 	/* Initialize key exchange */
 	if ((r = kex_ready(ssh, proposal ? proposal : myproposal)) != 0) {
 		fatal("kex_ready failed: %s", ssh_err(r));

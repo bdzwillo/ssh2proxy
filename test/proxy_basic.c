@@ -7,6 +7,7 @@
  *
  *   test_hostkey()      - proxy comes up and presents its configured hostkey
  *   test_hostkey_rsa()  - RSA hostkey: only rsa-sha2, pre-7.2 client rejected
+ *   test_hostkey_rsa_legacy() - legacy_rsa_hostkey re-enables ssh-rsa
  *   test_switch()       - the "fixed" switch routes a client by username
  *   test_badconf()      - a bad config makes the proxy exit instead of serving
  */
@@ -208,6 +209,73 @@ static void test_hostkey_rsa(const struct proxy_env *e)
 	reap_pg(proxy_pid, 50);
 }
 
+/* test_hostkey_rsa_legacy (1 test): with legacy_rsa_hostkey set, the proxy adds
+ * ssh-rsa to its RSA host-key algorithms (the opposite of test_hostkey_rsa).
+ *
+ * - a pre-OpenSSH-7.2 client (only ssh-rsa for host keys) verifies the hostkey
+ *   and gets past key exchange
+ */
+static void test_hostkey_rsa_legacy(const struct proxy_env *e)
+{
+	char tmp[256], cfg[PATH_MAX], log[PATH_MAX], hostkey[PATH_MAX];
+	char errfile[PATH_MAX], portarg[16], out[8192];
+	int port;
+	pid_t proxy_pid;
+
+	if (make_tmpdir("proxy_hostkey_rsa_legacy", tmp, sizeof(tmp)) != 0 ||
+	    ssh_gen_key_type(&e->tool,
+		hostkey_path(tmp, hostkey, sizeof(hostkey)), "rsa", 2048) != 0) {
+		tap_skip(1, "hostkey_rsa_legacy: setup failed (tmpdir + keygen)");
+		return;
+	}
+	snprintf(cfg, sizeof(cfg), "%s/sshproxy.conf", tmp);
+	snprintf(log, sizeof(log), "%s/proxy.log", tmp);
+	snprintf(errfile, sizeof(errfile), "%s/ssh.err", tmp);
+
+	port = pick_free_port();
+	if (file_writef(cfg,
+	    "bindaddr = 127.0.0.1:%d\n"
+	    "hostkey = %s\n"
+	    "switch_methods = fixed\n"
+	    "default_server = 127.0.0.1:1\n"
+	    "legacy_rsa_hostkey = 1\n",
+	    port, hostkey) != 0) {
+		tap_skip(1, "hostkey_rsa_legacy: write config failed");
+		return;
+	}
+
+	proxy_pid = proxy_spawn(e, cfg, log);
+	if (proxy_pid <= 0 || wait_for_listen(port, 5000) != 0) {
+		file_dump(log, "proxy.log");
+		tap_skip(1, "hostkey_rsa_legacy: proxy down");
+		reap_pg(proxy_pid, 50);
+		return;
+	}
+
+	snprintf(portarg, sizeof(portarg), "%d", port);
+	{
+		char *oldargv[] = {
+			(char *)e->tool.ssh, "-vvv", "-F", "/dev/null",
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "UserKnownHostsFile=/dev/null",
+			"-o", "GlobalKnownHostsFile=/dev/null",
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=5",
+			"-o", "HostKeyAlgorithms=ssh-rsa",
+			"-o", "PreferredAuthentications=publickey",
+			"-p", portarg, "old@127.0.0.1", "true", NULL
+		};
+		run_capture_e(oldargv, 0, out, sizeof(out), errfile);
+	}
+	if (!tap_ok(file_contains(errfile, "Server host key: ssh-rsa") &&
+	    !file_contains(errfile, "no matching host key type"),
+	    "hostkey_rsa_legacy: legacy_rsa_hostkey lets an ssh-rsa-only client in")) {
+		file_dump(errfile, "ssh.err");
+	}
+
+	reap_pg(proxy_pid, 50);
+}
+
 /* test_switch (3 tests): the "fixed" switch routes a client to the right
  * backend by username. The proxy picks a backend and dials it as soon as the
  * client sends its first userauth request (carrying the username), before auth
@@ -350,12 +418,13 @@ int main(int argc, char **argv)
 	struct proxy_env env;
 
 	(void)argc;
-	tap_plan(9);
+	tap_plan(10);
 
 	proxy_resolve_paths(&env, argv[0]);
 
 	test_hostkey(&env);
 	test_hostkey_rsa(&env);
+	test_hostkey_rsa_legacy(&env);
 	test_switch(&env);
 	test_badconf(&env);
 
