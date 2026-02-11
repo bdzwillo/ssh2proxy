@@ -228,6 +228,8 @@ int config_read(const char *name, struct ProxyOptions *options)
 				continue;
 			}
 			add_target(options, val, server);
+		} else if (match(key, "no_ext_info")) {
+			options->no_ext_info = 1;
 		} else if (match(key, "setuid")) {
 			options->uid = atoi(val);
 		} else if (match(key, "setgid")) {

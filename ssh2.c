@@ -110,6 +110,29 @@ static int ssh_compat_proposal(struct ssh *ssh)
 	return r;
 }
 
+/* advertise ext-info-c on the client (backend) leg so the backend sends
+ * SSH2_MSG_EXT_INFO with its server-sig-algs - proxyauth uses that list to
+ * pick the RSA backend-auth signature algorithm
+ */
+static int ssh_add_ext_info_c(struct ssh *ssh)
+{
+	int r;
+	char **proposal, *cat;
+
+	if ((r = kex_buf2prop(ssh->kex->my, NULL, &proposal)) != 0) {
+		return r;
+	}
+	if ((cat = kex_names_cat(proposal[PROPOSAL_KEX_ALGS], "ext-info-c")) == NULL) {
+		kex_prop_free(proposal);
+		return SSH_ERR_ALLOC_FAIL;
+	}
+	free(proposal[PROPOSAL_KEX_ALGS]);
+	proposal[PROPOSAL_KEX_ALGS] = cat;
+	r = kex_prop2buf(ssh->kex->my, proposal);
+	kex_prop_free(proposal);
+	return r;
+}
+
 struct ssh *ssh2_new(SSH2_CTX *ctx, int is_server, char **proposal)
 {
 	int r;
@@ -426,6 +449,10 @@ int ssh2_connect(struct ssh *ssh)
 		error("connect: compat_proposal: %s", ssh_err(r));
 		return r;
 	}
+	if (!options.no_ext_info && (r = ssh_add_ext_info_c(ssh)) != 0) {
+		error("connect: add ext-info-c: %s", ssh_err(r));
+		return r;
+	}
 	if ((r = kex_send_kexinit(ssh)) != 0) {
 		error("connect: send_kexinit: %s", ssh_err(r));
 		return r;
@@ -453,6 +480,21 @@ int ssh2_connect(struct ssh *ssh)
 	if ((r = ssh_packet_read_seqnr(ssh, &type, &seqnr)) != 0) {
 		error("connect: service packet_read: %s", ssh_err(r));
 		return r;
+	}
+	/* the backend sends SSH2_MSG_EXT_INFO right after NEWKEYS in response
+	 * to the advertised ext-info-c - consume it so kex->server_sig_algs is
+	 * set (proxyauth picks the RSA backend-auth signature alg from it)
+	 */
+	if (type == SSH2_MSG_EXT_INFO) {
+		debug("connect: server [%d] SSH2_MSG_EXT_INFO seq=%u", ssh_packet_get_connection_in(ssh), seqnr);
+		if ((r = kex_input_ext_info(SSH2_MSG_EXT_INFO, seqnr, ssh)) != 0) {
+			error("connect: SSH2_MSG_EXT_INFO: %s", ssh_err(r));
+			return r;
+		}
+		if ((r = ssh_packet_read_seqnr(ssh, &type, &seqnr)) != 0) {
+			error("connect: service packet_read 2: %s", ssh_err(r));
+			return r;
+		}
 	}
 	if (type != SSH2_MSG_SERVICE_ACCEPT) {
 		error("connect: expected SERVICE_ACCEPT, got %d", type);

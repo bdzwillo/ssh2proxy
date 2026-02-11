@@ -52,6 +52,7 @@
 #include "canohost.h"
 #include "compat.h"
 #include "misc.h"
+#include "match.h"
 #include "ssh_api.h"
 #include "sshproxy.h"
 #include "proxyconf.h"
@@ -649,6 +650,31 @@ int proxyauth_send_passwd(struct ssh *ssh, struct Authctxt *authctxt)
 	return 0;
 }
 
+/* Pick the public-key signature algorithm for an RSA backend-auth key.
+ * - if the backend sent server-sig-algs (EXT_INFO), use its first supported
+ *   alg in the order rsa-sha2-256, rsa-sha2-512, ssh-rsa
+ * - otherwise (no EXT_INFO, or none of those offered) use the key's own
+ *   name, ssh-rsa (e.g. a pre-7.2 backend)
+ * Non-RSA keys keep their own name. Returns buf or a static name.
+ */
+static const char *proxyauth_key_sigalg(struct ssh *ssh,
+	const struct sshkey *key, char *buf, size_t buflen)
+{
+	const char *server = (ssh && ssh->kex) ? ssh->kex->server_sig_algs : NULL;
+	static const char rsa_algs[] = "rsa-sha2-256,rsa-sha2-512,ssh-rsa";
+	char *m;
+
+	if (sshkey_type_plain(key->type) != KEY_RSA) {
+		return sshkey_ssh_name(key);
+	}
+	if (server != NULL && (m = match_list(rsa_algs, server, NULL)) != NULL) {
+		strlcpy(buf, m, buflen);
+		free(m);
+		return buf;
+	}
+	return sshkey_ssh_name(key);
+}
+
 int proxyauth_send_hostbased(struct ssh *ssh, struct Authctxt *authctxt,
 	struct sshkey *private)
 {
@@ -661,6 +687,8 @@ int proxyauth_send_hostbased(struct ssh *ssh, struct Authctxt *authctxt,
 	int len;
 	char *fp = NULL;
 	char *method = "hostbased";
+	char algbuf[64];
+	const char *alg;
 
 	if ((fp = sshkey_fingerprint(private, SSH_DIGEST_MD5, SSH_FP_DEFAULT)) == NULL) {
 		error("%s: sshkey_fingerprint failed", __func__);
@@ -678,7 +706,8 @@ int proxyauth_send_hostbased(struct ssh *ssh, struct Authctxt *authctxt,
 	strlcpy(chost, lname, len);
 	strlcat(chost, ".", len);
 
-	debug("userauth_hostbased: chost %s key_type=%d ssh_name='%s'", chost, private->type, sshkey_ssh_name(private));
+	alg = proxyauth_key_sigalg(ssh, private, algbuf, sizeof(algbuf));
+	debug("userauth_hostbased: chost %s key_type=%d ssh_name='%s' alg='%s'", chost, private->type, sshkey_ssh_name(private), alg);
 
 	/* construct data */
 	if ((b = sshbuf_new()) == NULL) {
@@ -698,7 +727,7 @@ int proxyauth_send_hostbased(struct ssh *ssh, struct Authctxt *authctxt,
 	    (r = sshbuf_put_cstring(b, authctxt->server_user ? authctxt->server_user : authctxt->user)) != 0 ||
 	    (r = sshbuf_put_cstring(b, authctxt->service)) != 0 ||
 	    (r = sshbuf_put_cstring(b, method)) != 0 ||
-	    (r = sshbuf_put_cstring(b, sshkey_ssh_name(private))) != 0 ||
+	    (r = sshbuf_put_cstring(b, alg)) != 0 ||
 	    (r = sshbuf_put_string(b, keyblob, keylen)) != 0 ||
 	    (r = sshbuf_put_cstring(b, chost)) != 0 ||
 	    (r = sshbuf_put_cstring(b, local_user)) != 0) {
@@ -709,16 +738,16 @@ int proxyauth_send_hostbased(struct ssh *ssh, struct Authctxt *authctxt,
 		sshbuf_dump(b, stderr);
 	}
 	if ((r = sshkey_sign(private, &sig, &siglen,
-	    sshbuf_ptr(b), sshbuf_len(b), sshkey_ssh_name(private), NULL, NULL, ssh->compat)) != 0) {
+	    sshbuf_ptr(b), sshbuf_len(b), alg, NULL, NULL, ssh->compat)) != 0) {
 		error("sign using hostkey %s %s failed: %s",
-		    sshkey_ssh_name(private), fp, ssh_err(r));
+		    alg, fp, ssh_err(r));
 		goto out;
 	}
 	if ((r = sshpkt_start(ssh, SSH2_MSG_USERAUTH_REQUEST)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, authctxt->server_user ? authctxt->server_user : authctxt->user)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, authctxt->service)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, method)) != 0 ||
-	    (r = sshpkt_put_cstring(ssh, sshkey_ssh_name(private))) != 0 ||
+	    (r = sshpkt_put_cstring(ssh, alg)) != 0 ||
 	    (r = sshpkt_put_string(ssh, keyblob, keylen)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, chost)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, local_user)) != 0 ||
@@ -749,6 +778,7 @@ int proxyauth_send_pubkey_nosig(struct ssh *ssh, struct Authctxt *authctxt)
 	size_t bloblen;
 	u_int have_sig = 0;
 	int r;
+	char algbuf[64];
 
 	debug("send_pubkey_nosig");
 
@@ -767,7 +797,7 @@ int proxyauth_send_pubkey_nosig(struct ssh *ssh, struct Authctxt *authctxt)
 	    (r = sshpkt_put_cstring(ssh, authctxt->service)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, authctxt->method)) != 0 ||
 	    (r = sshpkt_put_u8(ssh, have_sig)) != 0 ||
-	    (r = sshpkt_put_cstring(ssh, sshkey_ssh_name(authctxt->key))) != 0 ||
+	    (r = sshpkt_put_cstring(ssh, proxyauth_key_sigalg(ssh, authctxt->key, algbuf, sizeof(algbuf)))) != 0 ||
 	    (r = sshpkt_put_string(ssh, blob, bloblen)) != 0 ||
 	    (r = sshpkt_send(ssh)) != 0) {
 		error("%s: %s", __func__, ssh_err(r));

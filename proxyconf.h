@@ -57,6 +57,7 @@ struct ProxyOptions {
 	u_int	num_switch_targets;
 	int 	filter_mitm;
 	int 	legacy_rsa_hostkey;	/* offer ssh-rsa hostkey alg to pre-7.2 clients */
+	int 	no_ext_info;		/* don't request EXT_INFO from the backend */
 };
 
 void proxy_options_init(struct ProxyOptions *options);
