@@ -12,7 +12,11 @@
  * hostbased.
  *
  * test_pubkey() - observable steps, with no host trust set up
+ * test_pubkey_rsa() - client user-auth alg from server-sig-algs, rsa-sha2 vs ssh-rsa
  * test_hostbased() - full hostbased login in a user namespace
+ * test_hostbased_rsa() - RSA hostkey_auth, the proxy signs the leg rsa-sha2
+ * test_hostbased_rsa_legacy() - ssh-rsa-only backend, no_ext_info forces ssh-rsa
+ * test_hostbased_rsa_oldclient() - client offers only ssh-rsa
  * test_rekey() - in-session rekeying survives the proxy
  * test_interactive() - interactive pty session through the proxy
  */
@@ -61,6 +65,34 @@ static int ssh_rekey_cmd(const struct proxy_env *e, const char *user, int port,
 			"-o", "ConnectTimeout=5",
 			"-o", "PreferredAuthentications=publickey",
 			"-o", "RekeyLimit=16k",
+			"-i", (char *)identity, "-p", portarg, userat,
+			(char *)cmd, (char *)NULL
+		};
+		return run_capture(argv, 0, out, outsz);
+	}
+}
+
+/* like ssh_pubkey_cmd() but forces the client to offer only legacy ssh-rsa
+ * (SHA-1), as a pre-rsa-sha2 client would.
+ */
+static int ssh_oldclient_cmd(const struct proxy_env *e, const char *user, int port,
+	const char *identity, const char *cmd, char *out, size_t outsz)
+{
+	char userat[256], portarg[16];
+
+	snprintf(userat, sizeof(userat), "%s@127.0.0.1", user);
+	snprintf(portarg, sizeof(portarg), "%d", port);
+	{
+		char *argv[] = {
+			(char *)e->tool.ssh, "-F", "/dev/null",
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "UserKnownHostsFile=/dev/null",
+			"-o", "GlobalKnownHostsFile=/dev/null",
+			"-o", "LogLevel=ERROR",
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=5",
+			"-o", "PreferredAuthentications=publickey",
+			"-o", "PubkeyAcceptedAlgorithms=ssh-rsa",
 			"-i", (char *)identity, "-p", portarg, userat,
 			(char *)cmd, (char *)NULL
 		};
@@ -161,6 +193,115 @@ static void test_pubkey(const struct proxy_env *e)
 	}
 	if (!tap_ok(file_contains(plog, "userauth_hostbased"),
 	    "pubkey: proxy translates the client pubkey to hostbased")) {
+		file_dump(plog, "proxy.log");
+	}
+
+	reap_pg(proxy_pid, 50);
+	reap_pg(sshd_pid, 50);
+}
+
+/* test_pubkey_rsa (3 tests): a modern RSA client signs its user auth with
+ * rsa-sha2, not legacy ssh-rsa (SHA-1).
+ * - the proxy advertises ext-info-s and sends the client its server-sig-algs
+ * - the client picks rsa-sha2 from that list
+ * - the same key forced to ssh-rsa still authenticates, so the alg follows
+ *   what the proxy advertised, not the key
+ * - seen in the proxy's "pubkey: <alg> key_verify ok" log
+ * Modelled on test_pubkey (no namespace). The backend re-enables ssh-rsa so
+ * the forced ssh-rsa probe is accepted.
+ */
+static void test_pubkey_rsa(const struct proxy_env *e)
+{
+	char tmp[256], pcfg[PATH_MAX], plog[PATH_MAX];
+	char scfg[PATH_MAX], slog[PATH_MAX];
+	char hostkey[PATH_MAX], id[PATH_MAX], authkeys[PATH_MAX + 4];
+	char out[1024];
+	struct passwd *pw = getpwuid(getuid());
+	const char *me = pw ? pw->pw_name : "nobody";
+	int pport, bport;
+	pid_t sshd_pid, proxy_pid;
+
+	if (make_tmpdir("ssh_proxy_pubkey_rsa", tmp, sizeof(tmp)) != 0) {
+		tap_skip(3, "no tmpdir");
+		return;
+	}
+	snprintf(hostkey, sizeof(hostkey), "%s/hostkey", tmp);
+	snprintf(id, sizeof(id), "%s/id", tmp);
+	/* RSA client identity, doubling as hostkey_auth and the backend's
+	 * authorized_keys, as in test_pubkey
+	 */
+	if (ssh_gen_key(&e->tool, hostkey) != 0 ||
+	    ssh_gen_key_type(&e->tool, id, "rsa", 2048) != 0) {
+		tap_skip(3, "keygen failed");
+		return;
+	}
+	snprintf(authkeys, sizeof(authkeys), "%s.pub", id);
+	snprintf(scfg, sizeof(scfg), "%s/sshd_config", tmp);
+	snprintf(slog, sizeof(slog), "%s/sshd.log", tmp);
+	snprintf(pcfg, sizeof(pcfg), "%s/sshproxy.conf", tmp);
+	snprintf(plog, sizeof(plog), "%s/proxy.log", tmp);
+
+	bport = pick_free_port();
+	if (file_writef(scfg,
+	    "Port %d\n"
+	    "ListenAddress 127.0.0.1\n"
+	    "HostKey %s\n"
+	    "StrictModes no\n"
+	    "LogLevel DEBUG1\n"
+	    "UsePAM no\n"
+	    "PrintMotd no\n"
+	    "PasswordAuthentication no\n"
+	    "PubkeyAuthentication yes\n"
+	    "PubkeyAcceptedAlgorithms +ssh-rsa\n"
+	    "HostbasedAuthentication yes\n"
+	    "AuthorizedKeysFile %s\n",
+	    bport, hostkey, authkeys) != 0) {
+		tap_skip(3, "no sshd cfg");
+		return;
+	}
+
+	sshd_pid = sshd_spawn(e, scfg, slog);
+	if (!tap_ok(sshd_pid > 0 && wait_for_listen(bport, 5000) == 0,
+	    "rsa: backend sshd up on 127.0.0.1:%d", bport)) {
+		file_dump(slog, "sshd.log");
+		tap_skip(2, "backend sshd down");
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	pport = pick_free_port();
+	if (file_writef(pcfg,
+	    "bindaddr = 127.0.0.1:%d\n"
+	    "hostkey = %s\n"
+	    "hostkey_auth = %s\n"
+	    "switch_methods = fixed\n"
+	    "default_server = 127.0.0.1:%d\n",
+	    pport, hostkey, id, bport) != 0) {
+		tap_skip(2, "no proxy cfg");
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	proxy_pid = proxy_spawn(e, pcfg, plog);
+	if (proxy_pid <= 0 || wait_for_listen(pport, 5000) != 0) {
+		file_dump(plog, "proxy.log");
+		tap_skip(2, "proxy down");
+		reap_pg(proxy_pid, 50);
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	/* modern client: picks rsa-sha2 from the proxy's server-sig-algs */
+	ssh_pubkey_cmd(e, me, pport, id, "true", out, sizeof(out));
+	if (!tap_ok(file_contains(plog, "pubkey: rsa-sha2"),
+	    "rsa: modern client signs user auth with rsa-sha2")) {
+		file_dump(plog, "proxy.log");
+	}
+
+	/* same key, client forced to legacy ssh-rsa (SHA-1) */
+	ssh_oldclient_cmd(e, me, pport, id, "true", out, sizeof(out));
+	if (!tap_ok(file_contains(plog, "pubkey: ssh-rsa"),
+	    "rsa: ssh-rsa-forced client signs user auth with ssh-rsa")) {
 		file_dump(plog, "proxy.log");
 	}
 
@@ -310,6 +451,415 @@ static void test_hostbased(const struct proxy_env *e)
 	if (!tap_ok(strstr(out, "HB_SUCCESS") != NULL &&
 	    file_contains(slog, "Accepted hostbased for root"),
 	    "hostbased: pubkey login completes via the backend hostbased leg")) {
+		fprintf(stderr, "# out='%s'\n", out);
+		file_dump(plog, "proxy.log");
+		file_dump(slog, "sshd.log");
+	}
+
+	reap_pg(proxy_pid, 50);
+	reap_pg(sshd_pid, 50);
+}
+
+/* test_hostbased_rsa: same hostbased login as test_hostbased but with an RSA
+ * hostkey_auth.
+ * - the proxy picks rsa-sha2-256/512 from the backend's server-sig-algs
+ *   (EXT_INFO) instead of the legacy ssh-rsa (SHA-1)
+ * - so a default backend with no ssh-rsa re-enable accepts the pubkey probe
+ *   and the hostbased leg
+ * - asserts the login completes and the proxy signed rsa-sha2
+ * Same uid-0 user-namespace login as test_hostbased; skips without user ns.
+ */
+static void test_hostbased_rsa(const struct proxy_env *e)
+{
+	char tmp[256], home[PATH_MAX], sshdir[PATH_MAX + 8];
+	char pcfg[PATH_MAX], plog[PATH_MAX], scfg[PATH_MAX], slog[PATH_MAX];
+	char hostkey[PATH_MAX], id[PATH_MAX], authkeys[PATH_MAX + 4];
+	char out[4096], reason[256], stub[PATH_MAX + 32];
+	int pport, bport;
+	pid_t sshd_pid, proxy_pid;
+
+	resolve_sibling(e->tool.argv0, "setgroups_stub.so", stub, sizeof(stub));
+
+	if (enter_userns() != 0) {
+		snprintf(reason, sizeof(reason),
+			"user namespaces unavailable (%s)", strerror(errno));
+		tap_skip(2, reason);
+		return;
+	}
+	if (make_tmpdir("ssh_proxy_hb_rsa", tmp, sizeof(tmp)) != 0) {
+		tap_skip(2, "no tmpdir");
+		return;
+	}
+	snprintf(home, sizeof(home), "%s/home", tmp);
+	snprintf(sshdir, sizeof(sshdir), "%s/.ssh", home);
+	if (mkdir(home, 0755) < 0 || mkdir(sshdir, 0755) < 0) {
+		tap_skip(2, "no sandbox home");
+		return;
+	}
+	if (prep_hostbased_ns(tmp, home) != 0) {
+		snprintf(reason, sizeof(reason),
+			"namespace fs setup failed (%s)", strerror(errno));
+		tap_skip(2, reason);
+		return;
+	}
+
+	snprintf(hostkey, sizeof(hostkey), "%s/hostkey", tmp);
+	snprintf(id, sizeof(id), "%s/id", tmp);
+	if (ssh_gen_key(&e->tool, hostkey) != 0 ||
+	    ssh_gen_key_type(&e->tool, id, "rsa", 2048) != 0) {
+		tap_skip(2, "keygen failed");
+		return;
+	}
+	snprintf(authkeys, sizeof(authkeys), "%s.pub", id);
+
+	if (setup_hostbased_trust(home, sshdir, authkeys) != 0) {
+		tap_skip(2, "hostbased trust setup failed");
+		return;
+	}
+
+	snprintf(scfg, sizeof(scfg), "%s/sshd_config", tmp);
+	snprintf(slog, sizeof(slog), "%s/sshd.log", tmp);
+	snprintf(pcfg, sizeof(pcfg), "%s/sshproxy.conf", tmp);
+	snprintf(plog, sizeof(plog), "%s/proxy.log", tmp);
+
+	/* default backend: no ssh-rsa re-enable - the proxy must offer rsa-sha2 */
+	bport = pick_free_port();
+	if (file_writef(scfg,
+	    "Port %d\n"
+	    "ListenAddress 127.0.0.1\n"
+	    "HostKey %s\n"
+	    "StrictModes no\n"
+	    "LogLevel VERBOSE\n"
+	    "UsePAM no\n"
+	    "PrintMotd no\n"
+	    "PermitRootLogin yes\n"
+	    "PasswordAuthentication no\n"
+	    "PubkeyAuthentication yes\n"
+	    "HostbasedAuthentication yes\n"
+	    "HostbasedUsesNameFromPacketOnly yes\n"
+	    "IgnoreRhosts no\n"
+	    "AuthorizedKeysFile %s\n",
+	    bport, hostkey, authkeys) != 0) {
+		tap_skip(2, "no sshd cfg");
+		return;
+	}
+
+	setenv("LD_PRELOAD", stub, 1);
+	sshd_pid = sshd_spawn(e, scfg, slog);
+	unsetenv("LD_PRELOAD");
+	if (!tap_ok(sshd_pid > 0 && wait_for_listen(bport, 5000) == 0,
+	    "hb_rsa: backend sshd up on 127.0.0.1:%d (uid 0 in ns)", bport)) {
+		file_dump(slog, "sshd.log");
+		tap_skip(1, "backend sshd down");
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	pport = pick_free_port();
+	if (file_writef(pcfg,
+	    "bindaddr = 127.0.0.1:%d\n"
+	    "hostkey = %s\n"
+	    "hostkey_auth = %s\n"
+	    "switch_methods = fixed\n"
+	    "default_server = 127.0.0.1:%d\n",
+	    pport, hostkey, id, bport) != 0) {
+		tap_skip(1, "no proxy cfg");
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	proxy_pid = proxy_spawn(e, pcfg, plog);
+	if (proxy_pid <= 0 || wait_for_listen(pport, 5000) != 0) {
+		file_dump(plog, "proxy.log");
+		tap_skip(1, "proxy down");
+		reap_pg(proxy_pid, 50);
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	ssh_pubkey_cmd(e, "root", pport, id, "echo HB_SUCCESS", out, sizeof(out));
+
+	if (!tap_ok(strstr(out, "HB_SUCCESS") != NULL &&
+	    file_contains(slog, "Accepted hostbased for root"),
+	    "hb_rsa: RSA hostkey_auth login completes via the backend hostbased leg")) {
+		fprintf(stderr, "# out='%s'\n", out);
+		file_dump(plog, "proxy.log");
+		file_dump(slog, "sshd.log");
+	}
+	if (!tap_ok(file_contains(plog, "alg='rsa-sha2"),
+	    "hb_rsa: proxy signs the backend hostbased leg with rsa-sha2")) {
+		file_dump(plog, "proxy.log");
+	}
+
+	reap_pg(proxy_pid, 50);
+	reap_pg(sshd_pid, 50);
+}
+
+/* test_hostbased_rsa_legacy: a backend that accepts only ssh-rsa.
+ * - an 8.9 sshd over-advertises rsa-sha2 in server-sig-algs but rejects it
+ * - auto-negotiation would pick rsa-sha2 and fail, so the proxy is set
+ *   no_ext_info: it skips EXT_INFO and signs legacy ssh-rsa (SHA-1) instead
+ * - the backend accepts ssh-rsa, so the login completes
+ * - asserts the login completes and the proxy used ssh-rsa
+ * Same uid-0 user-namespace login as test_hostbased; skips without user ns.
+ */
+static void test_hostbased_rsa_legacy(const struct proxy_env *e)
+{
+	char tmp[256], home[PATH_MAX], sshdir[PATH_MAX + 8];
+	char pcfg[PATH_MAX], plog[PATH_MAX], scfg[PATH_MAX], slog[PATH_MAX];
+	char hostkey[PATH_MAX], id[PATH_MAX], authkeys[PATH_MAX + 4];
+	char out[4096], reason[256], stub[PATH_MAX + 32];
+	int pport, bport;
+	pid_t sshd_pid, proxy_pid;
+
+	resolve_sibling(e->tool.argv0, "setgroups_stub.so", stub, sizeof(stub));
+
+	if (enter_userns() != 0) {
+		snprintf(reason, sizeof(reason),
+			"user namespaces unavailable (%s)", strerror(errno));
+		tap_skip(2, reason);
+		return;
+	}
+	if (make_tmpdir("ssh_proxy_hb_rsa_legacy", tmp, sizeof(tmp)) != 0) {
+		tap_skip(2, "no tmpdir");
+		return;
+	}
+	snprintf(home, sizeof(home), "%s/home", tmp);
+	snprintf(sshdir, sizeof(sshdir), "%s/.ssh", home);
+	if (mkdir(home, 0755) < 0 || mkdir(sshdir, 0755) < 0) {
+		tap_skip(2, "no sandbox home");
+		return;
+	}
+	if (prep_hostbased_ns(tmp, home) != 0) {
+		snprintf(reason, sizeof(reason),
+			"namespace fs setup failed (%s)", strerror(errno));
+		tap_skip(2, reason);
+		return;
+	}
+
+	snprintf(hostkey, sizeof(hostkey), "%s/hostkey", tmp);
+	snprintf(id, sizeof(id), "%s/id", tmp);
+	if (ssh_gen_key(&e->tool, hostkey) != 0 ||
+	    ssh_gen_key_type(&e->tool, id, "rsa", 2048) != 0) {
+		tap_skip(2, "keygen failed");
+		return;
+	}
+	snprintf(authkeys, sizeof(authkeys), "%s.pub", id);
+
+	if (setup_hostbased_trust(home, sshdir, authkeys) != 0) {
+		tap_skip(2, "hostbased trust setup failed");
+		return;
+	}
+
+	snprintf(scfg, sizeof(scfg), "%s/sshd_config", tmp);
+	snprintf(slog, sizeof(slog), "%s/sshd.log", tmp);
+	snprintf(pcfg, sizeof(pcfg), "%s/sshproxy.conf", tmp);
+	snprintf(plog, sizeof(plog), "%s/proxy.log", tmp);
+
+	/* old backend: ssh-rsa is the only accepted public-key algorithm */
+	bport = pick_free_port();
+	if (file_writef(scfg,
+	    "Port %d\n"
+	    "ListenAddress 127.0.0.1\n"
+	    "HostKey %s\n"
+	    "StrictModes no\n"
+	    "LogLevel VERBOSE\n"
+	    "UsePAM no\n"
+	    "PrintMotd no\n"
+	    "PermitRootLogin yes\n"
+	    "PasswordAuthentication no\n"
+	    "PubkeyAuthentication yes\n"
+	    "PubkeyAcceptedAlgorithms ssh-rsa\n"
+	    "HostbasedAuthentication yes\n"
+	    "HostbasedAcceptedAlgorithms ssh-rsa\n"
+	    "HostbasedUsesNameFromPacketOnly yes\n"
+	    "IgnoreRhosts no\n"
+	    "AuthorizedKeysFile %s\n",
+	    bport, hostkey, authkeys) != 0) {
+		tap_skip(2, "no sshd cfg");
+		return;
+	}
+
+	setenv("LD_PRELOAD", stub, 1);
+	sshd_pid = sshd_spawn(e, scfg, slog);
+	unsetenv("LD_PRELOAD");
+	if (!tap_ok(sshd_pid > 0 && wait_for_listen(bport, 5000) == 0,
+	    "hb_rsa_legacy: backend sshd up on 127.0.0.1:%d (uid 0 in ns)", bport)) {
+		file_dump(slog, "sshd.log");
+		tap_skip(1, "backend sshd down");
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	/* no_ext_info: the proxy skips EXT_INFO, so with no server-sig-algs it
+	 * falls back to signing ssh-rsa - which the old backend accepts
+	 */
+	pport = pick_free_port();
+	if (file_writef(pcfg,
+	    "bindaddr = 127.0.0.1:%d\n"
+	    "hostkey = %s\n"
+	    "hostkey_auth = %s\n"
+	    "no_ext_info = 1\n"
+	    "switch_methods = fixed\n"
+	    "default_server = 127.0.0.1:%d\n",
+	    pport, hostkey, id, bport) != 0) {
+		tap_skip(1, "no proxy cfg");
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	proxy_pid = proxy_spawn(e, pcfg, plog);
+	if (proxy_pid <= 0 || wait_for_listen(pport, 5000) != 0) {
+		file_dump(plog, "proxy.log");
+		tap_skip(1, "proxy down");
+		reap_pg(proxy_pid, 50);
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	ssh_pubkey_cmd(e, "root", pport, id, "echo HB_SUCCESS", out, sizeof(out));
+
+	/* the backend's only algorithm is ssh-rsa, so a completed login proves
+	 * the proxy signed ssh-rsa - no need to read the proxy's own alg log
+	 */
+	if (!tap_ok(strstr(out, "HB_SUCCESS") != NULL &&
+	    file_contains(slog, "Accepted hostbased for root"),
+	    "hb_rsa_legacy: login completes via the backend's only alg ssh-rsa")) {
+		fprintf(stderr, "# out='%s'\n", out);
+		file_dump(plog, "proxy.log");
+		file_dump(slog, "sshd.log");
+	}
+
+	reap_pg(proxy_pid, 50);
+	reap_pg(sshd_pid, 50);
+}
+
+/* test_hostbased_rsa_oldclient: an old client that signs only ssh-rsa (SHA-1).
+ * - the client offers ssh-rsa; the proxy verifies it with no algorithm policy
+ * - the backend leg is independent (proxy re-auths with its own key, rsa-sha2)
+ * - client-key verification is unaffected by the backend-auth alg selection
+ * Asserts the login completes and the proxy verified the client's ssh-rsa.
+ * Same uid-0 user-namespace login as test_hostbased; skips without user ns.
+ */
+static void test_hostbased_rsa_oldclient(const struct proxy_env *e)
+{
+	char tmp[256], home[PATH_MAX], sshdir[PATH_MAX + 8];
+	char pcfg[PATH_MAX], plog[PATH_MAX], scfg[PATH_MAX], slog[PATH_MAX];
+	char hostkey[PATH_MAX], id[PATH_MAX], authkeys[PATH_MAX + 4];
+	char out[4096], reason[256], stub[PATH_MAX + 32];
+	int pport, bport;
+	pid_t sshd_pid, proxy_pid;
+
+	resolve_sibling(e->tool.argv0, "setgroups_stub.so", stub, sizeof(stub));
+
+	if (enter_userns() != 0) {
+		snprintf(reason, sizeof(reason),
+			"user namespaces unavailable (%s)", strerror(errno));
+		tap_skip(2, reason);
+		return;
+	}
+	if (make_tmpdir("ssh_proxy_hb_rsa_oldcli", tmp, sizeof(tmp)) != 0) {
+		tap_skip(2, "no tmpdir");
+		return;
+	}
+	snprintf(home, sizeof(home), "%s/home", tmp);
+	snprintf(sshdir, sizeof(sshdir), "%s/.ssh", home);
+	if (mkdir(home, 0755) < 0 || mkdir(sshdir, 0755) < 0) {
+		tap_skip(2, "no sandbox home");
+		return;
+	}
+	if (prep_hostbased_ns(tmp, home) != 0) {
+		snprintf(reason, sizeof(reason),
+			"namespace fs setup failed (%s)", strerror(errno));
+		tap_skip(2, reason);
+		return;
+	}
+
+	snprintf(hostkey, sizeof(hostkey), "%s/hostkey", tmp);
+	snprintf(id, sizeof(id), "%s/id", tmp);
+	if (ssh_gen_key(&e->tool, hostkey) != 0 ||
+	    ssh_gen_key_type(&e->tool, id, "rsa", 2048) != 0) {
+		tap_skip(2, "keygen failed");
+		return;
+	}
+	snprintf(authkeys, sizeof(authkeys), "%s.pub", id);
+
+	if (setup_hostbased_trust(home, sshdir, authkeys) != 0) {
+		tap_skip(2, "hostbased trust setup failed");
+		return;
+	}
+
+	snprintf(scfg, sizeof(scfg), "%s/sshd_config", tmp);
+	snprintf(slog, sizeof(slog), "%s/sshd.log", tmp);
+	snprintf(pcfg, sizeof(pcfg), "%s/sshproxy.conf", tmp);
+	snprintf(plog, sizeof(plog), "%s/proxy.log", tmp);
+
+	/* backend accepts ssh-rsa too, so the proxy's own leg works whether it
+	 * signs rsa-sha2 (with the feature) or ssh-rsa (a pre-feature proxy) -
+	 * this isolates the test to the client's ssh-rsa being accepted
+	 */
+	bport = pick_free_port();
+	if (file_writef(scfg,
+	    "Port %d\n"
+	    "ListenAddress 127.0.0.1\n"
+	    "HostKey %s\n"
+	    "StrictModes no\n"
+	    "LogLevel VERBOSE\n"
+	    "UsePAM no\n"
+	    "PrintMotd no\n"
+	    "PermitRootLogin yes\n"
+	    "PasswordAuthentication no\n"
+	    "PubkeyAuthentication yes\n"
+	    "PubkeyAcceptedAlgorithms +ssh-rsa\n"
+	    "HostbasedAuthentication yes\n"
+	    "HostbasedAcceptedAlgorithms +ssh-rsa\n"
+	    "HostbasedUsesNameFromPacketOnly yes\n"
+	    "IgnoreRhosts no\n"
+	    "AuthorizedKeysFile %s\n",
+	    bport, hostkey, authkeys) != 0) {
+		tap_skip(2, "no sshd cfg");
+		return;
+	}
+
+	setenv("LD_PRELOAD", stub, 1);
+	sshd_pid = sshd_spawn(e, scfg, slog);
+	unsetenv("LD_PRELOAD");
+	if (!tap_ok(sshd_pid > 0 && wait_for_listen(bport, 5000) == 0,
+	    "hb_rsa_oldcli: backend sshd up on 127.0.0.1:%d (uid 0 in ns)", bport)) {
+		file_dump(slog, "sshd.log");
+		tap_skip(1, "backend sshd down");
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	pport = pick_free_port();
+	if (file_writef(pcfg,
+	    "bindaddr = 127.0.0.1:%d\n"
+	    "hostkey = %s\n"
+	    "hostkey_auth = %s\n"
+	    "switch_methods = fixed\n"
+	    "default_server = 127.0.0.1:%d\n",
+	    pport, hostkey, id, bport) != 0) {
+		tap_skip(1, "no proxy cfg");
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	proxy_pid = proxy_spawn(e, pcfg, plog);
+	if (proxy_pid <= 0 || wait_for_listen(pport, 5000) != 0) {
+		file_dump(plog, "proxy.log");
+		tap_skip(1, "proxy down");
+		reap_pg(proxy_pid, 50);
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	ssh_oldclient_cmd(e, "root", pport, id, "echo HB_SUCCESS", out, sizeof(out));
+
+	if (!tap_ok(strstr(out, "HB_SUCCESS") != NULL &&
+	    file_contains(slog, "Accepted hostbased for root") &&
+	    file_contains(plog, "ssh-rsa key_verify ok"),
+	    "hb_rsa_oldcli: proxy accepts an ssh-rsa client and login completes")) {
 		fprintf(stderr, "# out='%s'\n", out);
 		file_dump(plog, "proxy.log");
 		file_dump(slog, "sshd.log");
@@ -677,11 +1227,15 @@ int main(int argc, char **argv)
 	struct proxy_env env;
 
 	(void)argc;
-	tap_plan(9);
+	tap_plan(19);
 
 	proxy_resolve_paths(&env, argv[0]);
 	test_pubkey(&env);        /* observable steps (no namespace) */
+	test_pubkey_rsa(&env);    /* client picks rsa-sha2 from server-sig-algs */
 	test_hostbased(&env);     /* full hostbased login (user namespace) */
+	test_hostbased_rsa(&env);   /* RSA hostkey_auth hostbased (user namespace) */
+	test_hostbased_rsa_legacy(&env); /* ssh-rsa-only backend (user namespace) */
+	test_hostbased_rsa_oldclient(&env); /* ssh-rsa-only client (user namespace) */
 	test_rekey(&env);         /* in-session rekeying (user namespace) */
 	test_interactive(&env);   /* interactive pty session (user namespace) */
 
