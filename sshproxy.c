@@ -1357,6 +1357,19 @@ static void proxy_child2(struct Authctxt *authctxt, struct ssh *ssh_client)
 					/* login brute force check: update rate */
 					check_login(ssh_client, authctxt, 0);
 				} else if (authctxt->state == AUTHSTAT_HOSTBASED) {
+					/* retry the hostbased leg once with legacy ssh-rsa:
+					 * - server-sig-algs covers pubkey algs, not hostbased
+					 * - so a negotiated rsa-sha2 leg may still be rejected
+					 */
+					if (!authctxt->hostbased_rsa_retry && ssh2_client_ctx->authkey &&
+					    sshkey_type_plain(ssh2_client_ctx->authkey->type) == KEY_RSA) {
+						authctxt->hostbased_rsa_retry = 1;
+						logit("%s: server hostbased auth failed, retrying with ssh-rsa", authctxt->id);
+						if ((r = proxyauth_send_hostbased(ssh_server, authctxt, ssh2_client_ctx->authkey)) != 0) {
+							fatal("%s: auth hostbased retry failed: %s", authctxt->id, ssh_err(r));
+						}
+						continue;
+					}
 					logit("%s: server hostbased auth failed", authctxt->id);
 				}
 				if (proxyauth_send_features( ssh_client, authctxt) < 0) {

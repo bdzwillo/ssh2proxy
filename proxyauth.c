@@ -706,7 +706,16 @@ int proxyauth_send_hostbased(struct ssh *ssh, struct Authctxt *authctxt,
 	strlcpy(chost, lname, len);
 	strlcat(chost, ".", len);
 
-	alg = proxyauth_key_sigalg(ssh, private, algbuf, sizeof(algbuf));
+	/* on a retry, sign with the key's legacy name (ssh-rsa):
+	 * - the first rsa-sha2 hostbased attempt was rejected
+	 * - the backend's HostbasedAcceptedAlgorithms differs from the pubkey
+	 *   algs in server-sig-algs that rsa-sha2 was negotiated from
+	 */
+	if (authctxt->hostbased_rsa_retry) {
+		alg = sshkey_ssh_name(private);
+	} else {
+		alg = proxyauth_key_sigalg(ssh, private, algbuf, sizeof(algbuf));
+	}
 	debug("userauth_hostbased: chost %s key_type=%d ssh_name='%s' alg='%s'", chost, private->type, sshkey_ssh_name(private), alg);
 
 	/* construct data */
@@ -767,7 +776,6 @@ int proxyauth_send_hostbased(struct ssh *ssh, struct Authctxt *authctxt,
 	free(lname);
 	free(fp);
 	free(chost);
-	sshkey_free(private);
 	sshbuf_free(b);
 	return r;
 }

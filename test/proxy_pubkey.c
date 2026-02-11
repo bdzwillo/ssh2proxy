@@ -15,6 +15,7 @@
  * test_pubkey_rsa() - client user-auth alg from server-sig-algs, rsa-sha2 vs ssh-rsa
  * test_hostbased() - full hostbased login in a user namespace
  * test_hostbased_rsa() - RSA hostkey_auth, the proxy signs the leg rsa-sha2
+ * test_hostbased_rsa_retry() - backend hostbased takes only ssh-rsa, proxy retries
  * test_hostbased_rsa_legacy() - ssh-rsa-only backend, no_ext_info forces ssh-rsa
  * test_hostbased_rsa_oldclient() - client offers only ssh-rsa
  * test_rekey() - in-session rekeying survives the proxy
@@ -589,6 +590,142 @@ static void test_hostbased_rsa(const struct proxy_env *e)
 	if (!tap_ok(file_contains(plog, "alg='rsa-sha2"),
 	    "hb_rsa: proxy signs the backend hostbased leg with rsa-sha2")) {
 		file_dump(plog, "proxy.log");
+	}
+
+	reap_pg(proxy_pid, 50);
+	reap_pg(sshd_pid, 50);
+}
+
+/* test_hostbased_rsa_retry: a backend that accepts rsa-sha2 for pubkey but
+ * only ssh-rsa for hostbased (HostbasedAcceptedAlgorithms ssh-rsa).
+ * - server-sig-algs advertises rsa-sha2, so the proxy signs the leg rsa-sha2
+ * - the backend rejects that hostbased leg
+ * - the proxy retries with legacy ssh-rsa and the login completes
+ * - no no_ext_info needed - the retry is automatic on the failure
+ * Same uid-0 user-namespace login as test_hostbased; skips without user ns.
+ */
+static void test_hostbased_rsa_retry(const struct proxy_env *e)
+{
+	char tmp[256], home[PATH_MAX], sshdir[PATH_MAX + 8];
+	char pcfg[PATH_MAX], plog[PATH_MAX], scfg[PATH_MAX], slog[PATH_MAX];
+	char hostkey[PATH_MAX], id[PATH_MAX], authkeys[PATH_MAX + 4];
+	char out[4096], reason[256], stub[PATH_MAX + 32];
+	int pport, bport;
+	pid_t sshd_pid, proxy_pid;
+
+	resolve_sibling(e->tool.argv0, "setgroups_stub.so", stub, sizeof(stub));
+
+	if (enter_userns() != 0) {
+		snprintf(reason, sizeof(reason),
+			"user namespaces unavailable (%s)", strerror(errno));
+		tap_skip(2, reason);
+		return;
+	}
+	if (make_tmpdir("ssh_proxy_hb_retry", tmp, sizeof(tmp)) != 0) {
+		tap_skip(2, "no tmpdir");
+		return;
+	}
+	snprintf(home, sizeof(home), "%s/home", tmp);
+	snprintf(sshdir, sizeof(sshdir), "%s/.ssh", home);
+	if (mkdir(home, 0755) < 0 || mkdir(sshdir, 0755) < 0) {
+		tap_skip(2, "no sandbox home");
+		return;
+	}
+	if (prep_hostbased_ns(tmp, home) != 0) {
+		snprintf(reason, sizeof(reason),
+			"namespace fs setup failed (%s)", strerror(errno));
+		tap_skip(2, reason);
+		return;
+	}
+
+	snprintf(hostkey, sizeof(hostkey), "%s/hostkey", tmp);
+	snprintf(id, sizeof(id), "%s/id", tmp);
+	if (ssh_gen_key(&e->tool, hostkey) != 0 ||
+	    ssh_gen_key_type(&e->tool, id, "rsa", 2048) != 0) {
+		tap_skip(2, "keygen failed");
+		return;
+	}
+	snprintf(authkeys, sizeof(authkeys), "%s.pub", id);
+
+	if (setup_hostbased_trust(home, sshdir, authkeys) != 0) {
+		tap_skip(2, "hostbased trust setup failed");
+		return;
+	}
+
+	snprintf(scfg, sizeof(scfg), "%s/sshd_config", tmp);
+	snprintf(slog, sizeof(slog), "%s/sshd.log", tmp);
+	snprintf(pcfg, sizeof(pcfg), "%s/sshproxy.conf", tmp);
+	snprintf(plog, sizeof(plog), "%s/proxy.log", tmp);
+
+	/* pubkey accepts rsa-sha2 (so server-sig-algs lists it), but hostbased
+	 * accepts only ssh-rsa:
+	 * - the proxy's negotiated rsa-sha2 hostbased leg is rejected
+	 * - so it must fall back to ssh-rsa
+	 */
+	bport = pick_free_port();
+	if (file_writef(scfg,
+	    "Port %d\n"
+	    "ListenAddress 127.0.0.1\n"
+	    "HostKey %s\n"
+	    "StrictModes no\n"
+	    "LogLevel VERBOSE\n"
+	    "UsePAM no\n"
+	    "PrintMotd no\n"
+	    "PermitRootLogin yes\n"
+	    "PasswordAuthentication no\n"
+	    "PubkeyAuthentication yes\n"
+	    "HostbasedAuthentication yes\n"
+	    "HostbasedAcceptedAlgorithms ssh-rsa\n"
+	    "HostbasedUsesNameFromPacketOnly yes\n"
+	    "IgnoreRhosts no\n"
+	    "AuthorizedKeysFile %s\n",
+	    bport, hostkey, authkeys) != 0) {
+		tap_skip(2, "no sshd cfg");
+		return;
+	}
+
+	setenv("LD_PRELOAD", stub, 1);
+	sshd_pid = sshd_spawn(e, scfg, slog);
+	unsetenv("LD_PRELOAD");
+	if (!tap_ok(sshd_pid > 0 && wait_for_listen(bport, 5000) == 0,
+	    "hb_retry: backend sshd up on 127.0.0.1:%d (uid 0 in ns)", bport)) {
+		file_dump(slog, "sshd.log");
+		tap_skip(1, "backend sshd down");
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	pport = pick_free_port();
+	if (file_writef(pcfg,
+	    "bindaddr = 127.0.0.1:%d\n"
+	    "hostkey = %s\n"
+	    "hostkey_auth = %s\n"
+	    "switch_methods = fixed\n"
+	    "default_server = 127.0.0.1:%d\n",
+	    pport, hostkey, id, bport) != 0) {
+		tap_skip(1, "no proxy cfg");
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	proxy_pid = proxy_spawn(e, pcfg, plog);
+	if (proxy_pid <= 0 || wait_for_listen(pport, 5000) != 0) {
+		file_dump(plog, "proxy.log");
+		tap_skip(1, "proxy down");
+		reap_pg(proxy_pid, 50);
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	ssh_pubkey_cmd(e, "root", pport, id, "echo HB_SUCCESS", out, sizeof(out));
+
+	if (!tap_ok(strstr(out, "HB_SUCCESS") != NULL &&
+	    file_contains(slog, "Accepted hostbased for root") &&
+	    file_contains(plog, "retrying with ssh-rsa"),
+	    "hb_retry: rsa-sha2 hostbased rejected, ssh-rsa retry completes the login")) {
+		fprintf(stderr, "# out='%s'\n", out);
+		file_dump(plog, "proxy.log");
+		file_dump(slog, "sshd.log");
 	}
 
 	reap_pg(proxy_pid, 50);
@@ -1227,13 +1364,14 @@ int main(int argc, char **argv)
 	struct proxy_env env;
 
 	(void)argc;
-	tap_plan(19);
+	tap_plan(21);
 
 	proxy_resolve_paths(&env, argv[0]);
 	test_pubkey(&env);        /* observable steps (no namespace) */
 	test_pubkey_rsa(&env);    /* client picks rsa-sha2 from server-sig-algs */
 	test_hostbased(&env);     /* full hostbased login (user namespace) */
 	test_hostbased_rsa(&env);   /* RSA hostkey_auth hostbased (user namespace) */
+	test_hostbased_rsa_retry(&env); /* ssh-rsa-only hostbased backend (user namespace) */
 	test_hostbased_rsa_legacy(&env); /* ssh-rsa-only backend (user namespace) */
 	test_hostbased_rsa_oldclient(&env); /* ssh-rsa-only client (user namespace) */
 	test_rekey(&env);         /* in-session rekeying (user namespace) */

@@ -56,6 +56,7 @@ struct Authctxt {
 	char *server_user;
 	char *style;
 	int have_sig;
+	int hostbased_rsa_retry;
 	struct sshkey *key;
 	int chan_client;
 	int chan_server;
