@@ -1,0 +1,199 @@
+#!/bin/bash
+#
+# use like: builder Dockerfile.el9 bash
+#
+
+usage () {
+	echo "usage: `basename $0` [-c] [-B ARG=VAL] <image-name|Dockerfile> [<command>]"
+	echo "   -c: use claude if configured (disables agent & local mounts)"
+	echo "       (might also use USE_CLAUDE=1 environment instead)"
+	echo "   -B: pass an additional --build-arg to buildah (repeatable)"
+	echo "       (a.e.: -B KERNEL_VERSION=\`uname -r\` for Dockerfile.kernel*)"
+	echo ""
+	echo "   When a Dockerfile is passed instead of an <image-name>, the image"
+	echo "   is build and the image-name is derived from the Dockerfile name."
+	echo "   a.e.: Dockerfile.el9 -> el-builder:9"
+}
+
+while getopts cvhB: option
+do
+	case $option in
+	c) USE_CLAUDE=1;;
+	v) VERBOSE=1;;
+	B) BUILD_ARGS="$BUILD_ARGS --build-arg $OPTARG";;
+	h|\?) echo "$0: Bad Option"
+	   usage
+	   exit 1;;
+	esac
+done
+shift `expr $OPTIND - 1`
+
+if [ $# -lt 1 ]; then
+	usage
+	exit 1
+fi
+
+IMAGE=$1
+shift
+
+HOMEDIR=/home/build
+GITROOT=`git rev-parse --show-toplevel 2>/dev/null`
+GITDIR=`git rev-parse --show-prefix 2>/dev/null`
+HOSTROOT=`if [ -n "$GITROOT" ]; then echo "$GITROOT"; else echo "${PWD}"; fi`
+HOSTDIR=`if [ -n "$GITDIR" ]; then echo "$GITDIR"; else realpath --relative-base="${PWD}" .; fi`
+COMMAND="cd \"$HOSTDIR\" && ${*:-bash}"
+
+# Allow to pass a Dockerfile instead of an <image-name>
+# - autodetected by name & derives the image-name
+# - a.e. Dockerfile.el9 -> el-builder:9
+# - bare Dockerfile -> container-builder:1
+#
+DOCKERFILE=`basename "$IMAGE" | grep '^Dockerfile'`
+if [ "$DOCKERFILE" ]; then
+	DOCKERDIR=`dirname "$IMAGE"`
+	if [ ! -f "$DOCKERDIR/$DOCKERFILE" ]; then
+		echo "$0: Dockerfile '$IMAGE' not found"
+		exit 1
+	fi
+	suffix=`echo "$DOCKERFILE" | sed 's/^Dockerfile\.\{0,1\}//'`	# el9 ("" for bare Dockerfile)
+	if [ -z "$suffix" ]; then
+		IMAGE=container-builder:1			# special-case the bare Dockerfile
+	else
+		version=`echo "$suffix" | sed 's/.*[^0-9]//'`	# trailing digits: 9 (empty for llm)
+		name=`echo "$suffix" | sed 's/[0-9]*$//'`	# base name: el
+		if [ -n "$version" ]; then
+			IMAGE="${name}-builder:${version}"	# el-builder:9
+		else
+			IMAGE="${name}-builder"			# el-builder
+		fi
+	fi
+fi
+
+IMAGE_NAME=`echo $IMAGE | awk -F: '{ print $1 }'`
+IMAGE_VERSION=`echo $IMAGE | awk -F: '{ print $2 }'`
+IMAGE_OS=`echo $IMAGE_NAME | awk -F- '{ print $1 }'`	# el-builder -> el
+# hostname (shell prompt): el-builder:9 -> el9-builder
+IMAGE_HOST=`if [ "$IMAGE_OS" != "$IMAGE_NAME" ]; then echo "$IMAGE_OS$IMAGE_VERSION-builder"; else echo "$IMAGE_NAME$IMAGE_VERSION"; fi`
+
+if [ -n "$GITROOT" ]; then
+	GIT_BASHRC=`git ls-files "${GITROOT}/.bashrc" 2>/dev/null`
+	GIT_PKGS=`git ls-files "${GITROOT}/pkgs" 2>/dev/null`
+	GIT_DOT_CLAUDE=`git ls-files "${GITROOT}/.claude" 2>/dev/null`
+fi
+
+# use custom builder container on top of builder container to build rpm
+#
+# - to rebbuild layers partially use:
+#   > podman image history container-builder:1
+#   > podman rmi -f <image1> <image2> ..
+#
+# - always use 'bash -l' to read environment from ~/.bashrc
+# - use 'make container-bash' for interactive shell
+#
+# - make scp requires nfs write access for the cvsuser group.
+#   (this is only available when the crun-runtime is used instead of runc)
+#
+# - use git toplevel-dir as homedir and set build environment accordingly
+# - use 'swh' instead of username in container homedir path
+#
+
+if [ -f "${HOME}/.gitconfig" ]; then
+	ADD_GITCONFIG="-v ${HOME}/.gitconfig:${HOMEDIR}/.gitconfig"
+fi
+if [ -f "${HOME}/.vimrc" ]; then
+	ADD_VIMRC="-v ${HOME}/.vimrc:${HOMEDIR}/.vimrc"
+fi
+if [ -d "${HOME}/.gnupg" ]; then
+	ADD_GNUPG="-v ${HOME}/.gnupg:${HOMEDIR}/.gnupg"
+fi
+if [ -d "${HOME}/.config" ]; then
+	ADD_COPILOT="-v ${HOME}/.config:${HOMEDIR}/.config"
+fi
+if [ -S "${SSH_AUTH_SOCK}" ]; then
+	ADD_AUTHSOCK="-v ${SSH_AUTH_SOCK}:/ssh-agent -e SSH_AUTH_SOCK=/ssh-agent"
+fi
+
+# after first use .claude.json contains a customApiKeyResponses.approved entry for the api key
+if [ $USE_CLAUDE ]; then
+	# goal: 'restrict' build-env [as-much-as-possible] if "AI" is used
+	# hint: use a 2nd container to 'push' or scp stuff
+	ADD_COPILOT=""
+	ADD_AUTHSOCK=""
+	ADD_GNUPG=""
+	if [ -f "${HOME}/.claude.json" ]; then
+		if [ ${ANTHROPIC_API_KEY} ]; then
+			ADD_CLAUDE="-v ${HOME}/.claude.json:${HOMEDIR}/.claude.json -e ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}"
+		else
+			ADD_CLAUDE="-v ${HOME}/.claude.json:${HOMEDIR}/.claude.json"
+		fi
+	fi
+	# If no .claude dir with repo specific rules exists,
+	# import the .claude dir with global rules.
+	# a.e.:
+	# - ~/.claude/settings.json for general claude setting
+	#   like: {"env": {"CLAUDE_CODE_DISABLE_MOUSE": "1"}}
+	# - ~/.claude/projects/-home-swh/memory/MEMORY.md for general
+	#   Auto memory (https://code.claude.com/docs/en/memory#auto-memory)
+	#   like coding-style, text-line-len, commit preferences.
+	#
+	if [ -n "$GIT_DOT_CLAUDE" ]; then
+		ADD_CLAUDE="${ADD_CLAUDE} -v $GIT_DOT_CLAUDE:${HOMEDIR}/.claude"
+	elif [ -d "${HOME}/.claude" ]; then
+		ADD_CLAUDE="${ADD_CLAUDE} -v ${HOME}/.claude:${HOMEDIR}/.claude"
+	fi
+	# The claude installation is a single binary compatible with
+	# all debian-10++ & all centos-8++ linux installations.
+	# - to avoid a warning on stratup the binary is mapped into PATH
+	#   as well as to the original .local/bin/claude install dir.
+	#
+	# Note: claude requires at least GLIBC_2.18 and is not compatible with el7
+	#       (el7/centos7 has a GLIBC_2.17 /lib64/libc.so.6)
+	#
+	if [ -f "${HOME}/.local/bin/claude" ]; then
+		CLAUDE_BIN=`readlink -f ${HOME}/.local/bin/claude`
+		ADD_CLAUDE="${ADD_CLAUDE} -v ${CLAUDE_BIN}:/usr/local/bin/claude -v ${CLAUDE_BIN}:${HOMEDIR}/.local/bin/claude -e DISABLE_AUTOUPDATER=1"
+	fi
+	# Add support for claude with ollama local models
+	# - requires access to local ollama port http://localhost:11434
+	# - use like: ollama launch claude --model gemma4-64k
+	#
+	if [ -f "/usr/local/bin/ollama" ]; then
+		ADD_CLAUDE="${ADD_CLAUDE} --network host -v /usr/local/bin/ollama:/usr/local/bin/ollama -v ${HOME}/.ollama:${HOMEDIR}/.ollama"
+	fi
+fi
+
+# use git managed .bashrc instead of /etc/bashrc if it exists
+if [ -z "$GIT_BASHRC" ]; then
+	if [ -f "/etc/bashrc" ]; then
+		ADD_BASHRC="-v /etc/bashrc:${HOMEDIR}/.bashrc"
+	fi
+fi
+
+# build the image from the Dockerfile before running it
+if [ "$DOCKERFILE" ]; then
+	( cd "$DOCKERDIR" && buildah build -f "$DOCKERFILE" --layers=true --build-arg DOCKER_USER=${USER} ${BUILD_ARGS} -t "${IMAGE}" . ) || exit 1
+fi
+
+if [ $VERBOSE ]; then
+	echo ==================================
+	if [ "$DOCKERFILE" ]; then
+		echo DOCKERFILE=${DOCKERFILE}
+		echo BUILD_ARGS=${BUILD_ARGS}
+	fi
+	echo IMAGE=${IMAGE}
+	echo IMAGE_NAME=${IMAGE_NAME}
+	echo IMAGE_VERSION=${IMAGE_VERSION}
+	echo HOMEDIR=${HOMEDIR}
+	echo HOSTROOT=${HOSTROOT}
+	echo HOSTDIR=${HOSTDIR}
+	echo ADD_AUTHSOCK=${ADD_AUTHSOCK}
+	echo ADD_COPILOT=${ADD_COPILOT}
+	echo ADD_CLAUDE=${ADD_CLAUDE/API_KEY=[^ ]*/API_KEY=${ANTHROPIC_API_KEY:0:20}..}
+	echo ADD_BASHRC=${ADD_BASHRC}
+	echo ==================================
+fi
+
+set -x
+
+podman run --rm -it -h ${IMAGE_HOST} --tz local --security-opt label=disable --userns=keep-id --group-add=keep-groups --runtime=/usr/bin/crun -v "${HOSTROOT}:${HOMEDIR}" ${ADD_BASHRC} -e ARCH=linux -e USER=${USER} -e TERM=${TERM} -w ${HOMEDIR} -e IN_CONTAINER=${IMAGE_VERSION} ${ADD_GITCONFIG} ${ADD_VIMRC} ${ADD_GNUPG} ${ADD_COPILOT} ${ADD_CLAUDE} ${ADD_AUTHSOCK} ${IMAGE} bash -l -c "${COMMAND}"
+

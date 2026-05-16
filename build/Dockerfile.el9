@@ -1,0 +1,45 @@
+# build container for el9
+#
+# build:
+# > buildah build -f Dockerfile.el9 -t rocky-builder:9.8
+# > build/builder rocky-builder:9.8 bash
+#
+ARG IMAGE=rocky-devel:9.8
+FROM registry.in.strato.de/webgods/container/base/$IMAGE
+
+RUN yum -y install perl-libwww-perl
+RUN yum -y install perl-Test-Simple
+RUN yum -y install epel-release
+RUN yum-config-manager --disable epel
+RUN yum -y install createrepo_c
+RUN yum -y install systemd-devel
+RUN yum -y install libnsl2-devel
+RUN yum -y install libcap-devel
+
+RUN yum -y -q -e0 update
+RUN yum -y -q -e0 remove *-firmware microcode_ctl
+RUN yum -y -q -e0 clean all
+RUN rm -rf /var/cache/{yum,dnf}
+
+
+RUN yum -y -q -e0 makecache >/dev/null 2>&1
+
+# install iso88591/iso885915 locales
+# see: https://access.redhat.com/solutions/6966655
+#
+RUN yum -y install glibc-all-langpacks
+
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
+
+# add neovim & nodejs for copilot support
+RUN yum -y --enablerepo=epel install neovim
+RUN yum -y module reset nodejs
+RUN yum -y module install nodejs:18
+
+# allow sudo (--group-add=keep-groups does not allow --group-add=wheel)
+ARG DOCKER_USER
+RUN echo "%$DOCKER_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/allowsudo
+
+CMD /bin/bash -li

@@ -1,0 +1,25 @@
+# build container for debian12
+#
+# build:
+# > buildah build -f Dockerfile.debian12 -t debian-builder:12
+# > build/builder debian-builder:12 bash
+#
+FROM docker.io/library/debian:bookworm
+
+RUN apt-get update && apt-get -y install \
+	build-essential \
+	autoconf automake gdb git libffi-dev zlib1g-dev libssl-dev \
+	vim neovim curl net-tools iputils-ping dnsutils netcat-openbsd \
+	perl libberkeleydb-perl libgoogle-protocolbuffers-perl libtest-base-perl libtext-diff-perl libtest-longstring-perl \
+	sudo libtool universal-ctags \
+	nodejs npm
+
+# allow sudo (--group-add=keep-groups does not allow --group-add=wheel)
+ARG DOCKER_USER
+RUN echo "%$DOCKER_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/allowsudo
+
+# root vi allow mouse copy/paste
+RUN echo "set mouse=" > /root/.vimrc
+
+CMD /bin/bash -li
+
