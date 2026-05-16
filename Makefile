@@ -9,7 +9,7 @@ PACKAGE_NAME =		ssh2proxy
 OPENSSH =		openssh-8.9p1
 
 PATCH = patch
-SSH_PATCHES = Makefile.in.patch
+SSH_PATCHES = Makefile.in.patch configure.patch
 ADD_CFLAGS = -DOPENSSL_SUPPRESS_DEPRECATED
 
 all: sshproxy
@@ -98,4 +98,7 @@ clean:
 	( cd $(OPENSSH) && \
 		make clean)
 	rm -f openssh
+
+distclean:
+	rm -rf $(OPENSSH) openssh
 

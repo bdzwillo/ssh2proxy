@@ -1,0 +1,14 @@
+diff -ur a/openssh-8.9p1-orig/configure a/openssh-8.9p1/configure
+--- a/openssh-8.9p1-orig/configure	2022-02-23 12:33:36.000000000 +0100
++++ a/openssh-8.9p1/configure	2026-07-01 15:04:27.165725225 +0200
+@@ -13704,8 +13704,8 @@
+ 				;;
+ 			101*)   ;; # 1.1.x
+ 			200*)   ;; # LibreSSL
+-			300*)   ;; # OpenSSL 3
+-			301*)   ;; # OpenSSL development branch.
++			30*)    ;; # OpenSSL 3.x
++			31*)    ;; # OpenSSL development branch.
+ 		        *)
+ 				as_fn_error $? "Unknown/unsupported OpenSSL version (\"$ssl_library_ver\")" "$LINENO" 5
+ 		                ;;
