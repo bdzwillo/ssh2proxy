@@ -222,6 +222,8 @@ static void test_pubkey_rsa(const struct proxy_env *e)
 	int pport, bport;
 	pid_t sshd_pid, proxy_pid;
 
+	ssh_enable_legacy_rsa_sha1();
+
 	if (make_tmpdir("ssh_proxy_pubkey_rsa", tmp, sizeof(tmp)) != 0) {
 		tap_skip(3, "no tmpdir");
 		return;
@@ -348,6 +350,8 @@ static void test_hostbased(const struct proxy_env *e)
 	char out[4096], reason[256], stub[PATH_MAX + 32];
 	int pport, bport;
 	pid_t sshd_pid, proxy_pid;
+
+	ssh_enable_legacy_rsa_sha1();
 
 	resolve_sibling(e->tool.argv0, "setgroups_stub.so", stub, sizeof(stub));
 
@@ -478,6 +482,8 @@ static void test_hostbased_rsa(const struct proxy_env *e)
 	char out[4096], reason[256], stub[PATH_MAX + 32];
 	int pport, bport;
 	pid_t sshd_pid, proxy_pid;
+
+	ssh_enable_legacy_rsa_sha1();
 
 	resolve_sibling(e->tool.argv0, "setgroups_stub.so", stub, sizeof(stub));
 
@@ -612,6 +618,8 @@ static void test_hostbased_rsa_retry(const struct proxy_env *e)
 	char out[4096], reason[256], stub[PATH_MAX + 32];
 	int pport, bport;
 	pid_t sshd_pid, proxy_pid;
+
+	ssh_enable_legacy_rsa_sha1();
 
 	resolve_sibling(e->tool.argv0, "setgroups_stub.so", stub, sizeof(stub));
 
@@ -748,6 +756,8 @@ static void test_hostbased_rsa_legacy(const struct proxy_env *e)
 	char out[4096], reason[256], stub[PATH_MAX + 32];
 	int pport, bport;
 	pid_t sshd_pid, proxy_pid;
+
+	ssh_enable_legacy_rsa_sha1();
 
 	resolve_sibling(e->tool.argv0, "setgroups_stub.so", stub, sizeof(stub));
 
@@ -886,6 +896,8 @@ static void test_hostbased_rsa_oldclient(const struct proxy_env *e)
 	char out[4096], reason[256], stub[PATH_MAX + 32];
 	int pport, bport;
 	pid_t sshd_pid, proxy_pid;
+
+	ssh_enable_legacy_rsa_sha1();
 
 	resolve_sibling(e->tool.argv0, "setgroups_stub.so", stub, sizeof(stub));
 
@@ -1026,6 +1038,8 @@ static void test_rekey(const struct proxy_env *e)
 	size_t outsz = REKEY_BYTES + 4096;
 	int pport, bport;
 	pid_t sshd_pid, proxy_pid;
+
+	ssh_enable_legacy_rsa_sha1();
 
 	resolve_sibling(e->tool.argv0, "setgroups_stub.so", stub, sizeof(stub));
 

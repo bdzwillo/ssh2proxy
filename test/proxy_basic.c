@@ -222,6 +222,8 @@ static void test_hostkey_rsa_legacy(const struct proxy_env *e)
 	int port;
 	pid_t proxy_pid;
 
+	ssh_enable_legacy_rsa_sha1();
+
 	if (make_tmpdir("proxy_hostkey_rsa_legacy", tmp, sizeof(tmp)) != 0 ||
 	    ssh_gen_key_type(&e->tool,
 		hostkey_path(tmp, hostkey, sizeof(hostkey)), "rsa", 2048) != 0) {

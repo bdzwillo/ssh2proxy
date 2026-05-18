@@ -11,6 +11,7 @@
  *   ssh_gen_key_type()     run ssh-keygen for a throwaway key (type + optional bits)
  *   ssh_gen_key()          ssh_gen_key_type() shorthand for ed25519
  *   ssh_dump_log_reason()  print a server log's auth/session refusal lines
+ *   ssh_enable_legacy_rsa_sha1() re-enable ssh-rsa (SHA-1) for spawned tools
  *
  * The generic, ssh-agnostic helpers (ports, work dirs, process spawn, file/path
  * utilities) live in util.h, which this header includes.
@@ -19,6 +20,16 @@
 #define TEST_SSH_TEST_H
 
 #include "util.h"
+
+/* Re-enable legacy ssh-rsa (SHA-1) signatures in spawned ssh/sshproxy/sshd:
+ * - recent EL9 openssl disables SHA-1 signing via crypto-policy
+ * - harmless elsewhere (Debian permits SHA-1, ignores this variable)
+ * - needed for ssh-rsa legacy auth (modern rsa-sha2 is unaffected)
+ */
+static inline void ssh_enable_legacy_rsa_sha1(void)
+{
+	setenv("OPENSSL_ENABLE_SHA1_SIGNATURES", "1", 1);
+}
 
 /* Build-tree paths, embedded as the .tool member of struct proxy_env:
  *   - root         <repo> root the tools were derived from (for extra tools)
