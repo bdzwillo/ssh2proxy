@@ -107,19 +107,22 @@ static int ssh_compat_proposal(struct ssh *ssh)
 	return r;
 }
 
-/* advertise ext-info-c on the client (backend) leg so the backend sends
- * SSH2_MSG_EXT_INFO with its server-sig-algs - proxyauth uses that list to
- * pick the RSA backend-auth signature algorithm
+/* advertise the matching ext-info token on each side:
+ * - ext-info-c to the backend: it replies with SSH2_MSG_EXT_INFO carrying
+ *   its server-sig-algs, from which proxyauth picks the RSA backend-auth alg
+ * - ext-info-s to the client: it then accepts the EXT_INFO the libssh kex
+ *   sends with the proxy's server-sig-algs, and signs user auth with rsa-sha2
  */
-static int ssh_add_ext_info_c(struct ssh *ssh)
+static int ssh_add_ext_info(struct ssh *ssh)
 {
 	int r;
 	char **proposal, *cat;
+	const char *tok = ssh->kex->server ? "ext-info-s" : "ext-info-c";
 
 	if ((r = kex_buf2prop(ssh->kex->my, NULL, &proposal)) != 0) {
 		return r;
 	}
-	if ((cat = kex_names_cat(proposal[PROPOSAL_KEX_ALGS], "ext-info-c")) == NULL) {
+	if ((cat = kex_names_cat(proposal[PROPOSAL_KEX_ALGS], tok)) == NULL) {
 		kex_prop_free(proposal);
 		return SSH_ERR_ALLOC_FAIL;
 	}
@@ -130,11 +133,11 @@ static int ssh_add_ext_info_c(struct ssh *ssh)
 	return r;
 }
 
-/* advertise strict kex per leg (terrapin mitigation, OpenSSH >= 9.6).
+/* advertise strict kex on each side (terrapin mitigation, OpenSSH >= 9.6).
  * both peers must signal it or neither resets the packet sequence after
  * NEWKEYS - a one-sided reset corrupts the first post-kex packet. the
  * libssh kex code enables strict mode whenever the peer signals it, so
- * the proxy has to echo the matching token on each leg.
+ * the proxy has to echo the matching token on each side.
  */
 static int ssh_add_kex_strict(struct ssh *ssh)
 {
@@ -376,6 +379,10 @@ int ssh2_accept(struct ssh *ssh)
 		error("accept: compat_proposal: %s", ssh_err(r));
 		return r;
 	}
+	if (!options.no_ext_info && (r = ssh_add_ext_info(ssh)) != 0) {
+		error("accept: add ext-info-s: %s", ssh_err(r));
+		return r;
+	}
 	if ((r = ssh_add_kex_strict(ssh)) != 0) {
 		error("accept: add kex-strict-s: %s", ssh_err(r));
 		return r;
@@ -402,6 +409,20 @@ int ssh2_accept(struct ssh *ssh)
 	if ((r = ssh_packet_read_seqnr(ssh, &type, &seqnr)) != 0) {
 		error("accept: service packet_read: %s", ssh_err(r));
 		return r;
+	}
+	/* a client that saw the advertised ext-info-s may send its own
+	 * SSH2_MSG_EXT_INFO before the SERVICE_REQUEST - consume it
+	 */
+	if (type == SSH2_MSG_EXT_INFO) {
+		debug("accept: client [%d] SSH2_MSG_EXT_INFO seq=%u", ssh_packet_get_connection_in(ssh), seqnr);
+		if ((r = kex_input_ext_info(SSH2_MSG_EXT_INFO, seqnr, ssh)) != 0) {
+			error("accept: SSH2_MSG_EXT_INFO: %s", ssh_err(r));
+			return r;
+		}
+		if ((r = ssh_packet_read_seqnr(ssh, &type, &seqnr)) != 0) {
+			error("accept: service packet_read 2: %s", ssh_err(r));
+			return r;
+		}
 	}
 	if (type != SSH2_MSG_SERVICE_REQUEST) {
 		error("accept: expected SERVICE_REQUEST, got %d", type);
@@ -481,7 +502,7 @@ int ssh2_connect(struct ssh *ssh)
 		error("connect: compat_proposal: %s", ssh_err(r));
 		return r;
 	}
-	if (!options.no_ext_info && (r = ssh_add_ext_info_c(ssh)) != 0) {
+	if (!options.no_ext_info && (r = ssh_add_ext_info(ssh)) != 0) {
 		error("connect: add ext-info-c: %s", ssh_err(r));
 		return r;
 	}

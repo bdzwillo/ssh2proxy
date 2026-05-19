@@ -1386,6 +1386,16 @@ static void proxy_child2(struct Authctxt *authctxt, struct ssh *ssh_client)
 				sshpkt_get(ssh_server, NULL, len); // consume msg
 				continue;
 			}
+			if (type == SSH2_MSG_EXT_INFO) {
+				/* OpenSSH >= 9.6 may send a second EXT_INFO during
+				 * userauth (ext-info-in-auth). It carries only the
+				 * backend's server-sig-algs - consume it, the client
+				 * already has the proxy's algs.
+				 */
+				debug("%s: server SSH2_MSG_EXT_INFO (consumed)", authctxt->id);
+				sshpkt_get(ssh_server, NULL, len); // consume msg
+				continue;
+			}
 			if (type == SSH2_MSG_CHANNEL_OPEN_CONFIRMATION) {
 				debug("%s: server SSH2_MSG_CHANNEL_OPEN_CONFIRMATION", authctxt->id);
 

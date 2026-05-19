@@ -201,17 +201,13 @@ static void test_pubkey(const struct proxy_env *e)
 	reap_pg(sshd_pid, 50);
 }
 
-/* test_pubkey_rsa (3 tests): a modern RSA client signs its user auth with
- * rsa-sha2, not legacy ssh-rsa (SHA-1).
- * - the proxy advertises ext-info-s and sends the client its server-sig-algs
- * - the client picks rsa-sha2 from that list
- * - the same key forced to ssh-rsa still authenticates, so the alg follows
- *   what the proxy advertised, not the key
- * - seen in the proxy's "pubkey: <alg> key_verify ok" log
- * Modelled on test_pubkey (no namespace). The backend re-enables ssh-rsa so
- * the forced ssh-rsa probe is accepted.
+/* test_ext_info_in_auth (3 tests): an OpenSSH >= 9.6 backend may send a second
+ * SSH2_MSG_EXT_INFO during userauth (ext-info-in-auth@openssh.com). The proxy
+ * must consume it rather than error-drop it as unrelayable. A plain pubkey login
+ * makes the backend emit the mid-auth EXT_INFO; assert it did and that the proxy
+ * did not error-drop it.
  */
-static void test_pubkey_rsa(const struct proxy_env *e)
+static void test_ext_info_in_auth(const struct proxy_env *e)
 {
 	char tmp[256], pcfg[PATH_MAX], plog[PATH_MAX];
 	char scfg[PATH_MAX], slog[PATH_MAX];
@@ -222,19 +218,13 @@ static void test_pubkey_rsa(const struct proxy_env *e)
 	int pport, bport;
 	pid_t sshd_pid, proxy_pid;
 
-	ssh_enable_legacy_rsa_sha1();
-
-	if (make_tmpdir("ssh_proxy_pubkey_rsa", tmp, sizeof(tmp)) != 0) {
+	if (make_tmpdir("ssh_proxy_ext_info", tmp, sizeof(tmp)) != 0) {
 		tap_skip(3, "no tmpdir");
 		return;
 	}
 	snprintf(hostkey, sizeof(hostkey), "%s/hostkey", tmp);
 	snprintf(id, sizeof(id), "%s/id", tmp);
-	/* RSA client identity, doubling as hostkey_auth and the backend's
-	 * authorized_keys, as in test_pubkey
-	 */
-	if (ssh_gen_key(&e->tool, hostkey) != 0 ||
-	    ssh_gen_key_type(&e->tool, id, "rsa", 2048) != 0) {
+	if (ssh_gen_key(&e->tool, hostkey) != 0 || ssh_gen_key(&e->tool, id) != 0) {
 		tap_skip(3, "keygen failed");
 		return;
 	}
@@ -244,6 +234,7 @@ static void test_pubkey_rsa(const struct proxy_env *e)
 	snprintf(pcfg, sizeof(pcfg), "%s/sshproxy.conf", tmp);
 	snprintf(plog, sizeof(plog), "%s/proxy.log", tmp);
 
+	/* backend at DEBUG1 so its kex_server_update_ext_info line is logged */
 	bport = pick_free_port();
 	if (file_writef(scfg,
 	    "Port %d\n"
@@ -255,8 +246,6 @@ static void test_pubkey_rsa(const struct proxy_env *e)
 	    "PrintMotd no\n"
 	    "PasswordAuthentication no\n"
 	    "PubkeyAuthentication yes\n"
-	    "PubkeyAcceptedAlgorithms +ssh-rsa\n"
-	    "HostbasedAuthentication yes\n"
 	    "AuthorizedKeysFile %s\n",
 	    bport, hostkey, authkeys) != 0) {
 		tap_skip(3, "no sshd cfg");
@@ -265,7 +254,7 @@ static void test_pubkey_rsa(const struct proxy_env *e)
 
 	sshd_pid = sshd_spawn(e, scfg, slog);
 	if (!tap_ok(sshd_pid > 0 && wait_for_listen(bport, 5000) == 0,
-	    "rsa: backend sshd up on 127.0.0.1:%d", bport)) {
+	    "ext_info_in_auth: backend sshd up on 127.0.0.1:%d", bport)) {
 		file_dump(slog, "sshd.log");
 		tap_skip(2, "backend sshd down");
 		reap_pg(sshd_pid, 50);
@@ -294,10 +283,130 @@ static void test_pubkey_rsa(const struct proxy_env *e)
 		return;
 	}
 
+	/* the auth outcome does not matter: the backend sends the mid-auth
+	 * EXT_INFO on the first userauth request, before the method is processed
+	 */
+	ssh_pubkey_cmd(e, me, pport, id, "true", out, sizeof(out));
+
+	if (!tap_ok(file_contains(slog, "kex_server_update_ext_info"),
+	    "ext_info_in_auth: backend sends a mid-auth SSH2_MSG_EXT_INFO")) {
+		file_dump(slog, "sshd.log");
+	}
+	if (!tap_ok(!file_contains(plog, "no passthrough for server msg 7"),
+	    "ext_info_in_auth: proxy handles the backend EXT_INFO instead of dropping it")) {
+		file_dump(plog, "proxy.log");
+	}
+
+	reap_pg(proxy_pid, 50);
+	reap_pg(sshd_pid, 50);
+}
+
+/* test_pubkey_rsa (4 tests): a modern RSA client signs its user auth with
+ * rsa-sha2, not legacy ssh-rsa (SHA-1).
+ * - the proxy advertises ext-info-s and sends the client its server-sig-algs
+ * - the client picks rsa-sha2 from that list
+ * - the client replies with its own EXT_INFO, which the proxy consumes
+ * - the same key forced to ssh-rsa still authenticates, so the alg follows
+ *   what the proxy advertised, not the key
+ * - seen in the proxy's "pubkey: <alg> key_verify ok" log
+ * Modelled on test_pubkey (no namespace). The backend re-enables ssh-rsa so
+ * the forced ssh-rsa probe is accepted.
+ */
+static void test_pubkey_rsa(const struct proxy_env *e)
+{
+	char tmp[256], pcfg[PATH_MAX], plog[PATH_MAX];
+	char scfg[PATH_MAX], slog[PATH_MAX];
+	char hostkey[PATH_MAX], id[PATH_MAX], authkeys[PATH_MAX + 4];
+	char out[1024];
+	struct passwd *pw = getpwuid(getuid());
+	const char *me = pw ? pw->pw_name : "nobody";
+	int pport, bport;
+	pid_t sshd_pid, proxy_pid;
+
+	ssh_enable_legacy_rsa_sha1();
+
+	if (make_tmpdir("ssh_proxy_pubkey_rsa", tmp, sizeof(tmp)) != 0) {
+		tap_skip(4, "no tmpdir");
+		return;
+	}
+	snprintf(hostkey, sizeof(hostkey), "%s/hostkey", tmp);
+	snprintf(id, sizeof(id), "%s/id", tmp);
+	/* RSA client identity, doubling as hostkey_auth and the backend's
+	 * authorized_keys, as in test_pubkey
+	 */
+	if (ssh_gen_key(&e->tool, hostkey) != 0 ||
+	    ssh_gen_key_type(&e->tool, id, "rsa", 2048) != 0) {
+		tap_skip(4, "keygen failed");
+		return;
+	}
+	snprintf(authkeys, sizeof(authkeys), "%s.pub", id);
+	snprintf(scfg, sizeof(scfg), "%s/sshd_config", tmp);
+	snprintf(slog, sizeof(slog), "%s/sshd.log", tmp);
+	snprintf(pcfg, sizeof(pcfg), "%s/sshproxy.conf", tmp);
+	snprintf(plog, sizeof(plog), "%s/proxy.log", tmp);
+
+	bport = pick_free_port();
+	if (file_writef(scfg,
+	    "Port %d\n"
+	    "ListenAddress 127.0.0.1\n"
+	    "HostKey %s\n"
+	    "StrictModes no\n"
+	    "LogLevel DEBUG1\n"
+	    "UsePAM no\n"
+	    "PrintMotd no\n"
+	    "PasswordAuthentication no\n"
+	    "PubkeyAuthentication yes\n"
+	    "PubkeyAcceptedAlgorithms +ssh-rsa\n"
+	    "HostbasedAuthentication yes\n"
+	    "AuthorizedKeysFile %s\n",
+	    bport, hostkey, authkeys) != 0) {
+		tap_skip(4, "no sshd cfg");
+		return;
+	}
+
+	sshd_pid = sshd_spawn(e, scfg, slog);
+	if (!tap_ok(sshd_pid > 0 && wait_for_listen(bport, 5000) == 0,
+	    "rsa: backend sshd up on 127.0.0.1:%d", bport)) {
+		file_dump(slog, "sshd.log");
+		tap_skip(3, "backend sshd down");
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	pport = pick_free_port();
+	if (file_writef(pcfg,
+	    "bindaddr = 127.0.0.1:%d\n"
+	    "hostkey = %s\n"
+	    "hostkey_auth = %s\n"
+	    "switch_methods = fixed\n"
+	    "default_server = 127.0.0.1:%d\n",
+	    pport, hostkey, id, bport) != 0) {
+		tap_skip(3, "no proxy cfg");
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
+	proxy_pid = proxy_spawn(e, pcfg, plog);
+	if (proxy_pid <= 0 || wait_for_listen(pport, 5000) != 0) {
+		file_dump(plog, "proxy.log");
+		tap_skip(3, "proxy down");
+		reap_pg(proxy_pid, 50);
+		reap_pg(sshd_pid, 50);
+		return;
+	}
+
 	/* modern client: picks rsa-sha2 from the proxy's server-sig-algs */
 	ssh_pubkey_cmd(e, me, pport, id, "true", out, sizeof(out));
 	if (!tap_ok(file_contains(plog, "pubkey: rsa-sha2"),
 	    "rsa: modern client signs user auth with rsa-sha2")) {
+		file_dump(plog, "proxy.log");
+	}
+
+	/* a modern client sends its own EXT_INFO after seeing ext-info-s:
+	 * - assert the proxy consumes it before the SERVICE_REQUEST
+	 */
+	if (!tap_ok(file_contains(plog, "accept: client"),
+	    "rsa: proxy consumes the client's EXT_INFO (ext-info-s advertised)")) {
 		file_dump(plog, "proxy.log");
 	}
 
@@ -1378,11 +1487,12 @@ int main(int argc, char **argv)
 	struct proxy_env env;
 
 	(void)argc;
-	tap_plan(21);
+	tap_plan(25);
 
 	proxy_resolve_paths(&env, argv[0]);
 	test_pubkey(&env);        /* observable steps (no namespace) */
 	test_pubkey_rsa(&env);    /* client picks rsa-sha2 from server-sig-algs */
+	test_ext_info_in_auth(&env); /* backend mid-auth EXT_INFO (no namespace) */
 	test_hostbased(&env);     /* full hostbased login (user namespace) */
 	test_hostbased_rsa(&env);   /* RSA hostkey_auth hostbased (user namespace) */
 	test_hostbased_rsa_retry(&env); /* ssh-rsa-only hostbased backend (user namespace) */
