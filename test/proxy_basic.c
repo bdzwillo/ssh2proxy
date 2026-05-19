@@ -283,7 +283,7 @@ static void test_hostkey_rsa_legacy(const struct proxy_env *e)
 	reap_pg(proxy_pid, 50);
 }
 
-/* test_switch (3 tests): the "fixed" switch routes a client to the right
+/* test_switch (4 tests): the "fixed" switch routes a client to the right
  * backend by username. The proxy picks a backend and dials it as soon as the
  * client sends its first userauth request (carrying the username), before auth
  * completes - so a login that never succeeds still proves the routing. Two
@@ -303,7 +303,7 @@ static void test_switch(const struct proxy_env *e)
 
 	if (make_tmpdir("proxy_switch", tmp, sizeof(tmp)) != 0 ||
 	    ssh_gen_key(&e->tool, hostkey_path(tmp, hostkey, sizeof(hostkey))) != 0) {
-		tap_skip(3, "switch: setup failed");
+		tap_skip(4, "switch: setup failed");
 		return;
 	}
 	snprintf(cfg, sizeof(cfg), "%s/sshproxy.conf", tmp);
@@ -315,7 +315,7 @@ static void test_switch(const struct proxy_env *e)
 	fd_a = backend_listener(port_a);
 	fd_d = backend_listener(port_d);
 	if (fd_a < 0 || fd_d < 0) {
-		tap_skip(3, "switch: backend_listener failed");
+		tap_skip(4, "switch: backend_listener failed");
 		return;
 	}
 
@@ -326,7 +326,7 @@ static void test_switch(const struct proxy_env *e)
 	    "default_server = 127.0.0.1:%d\n"
 	    "switch_target = alice 127.0.0.1:%d\n",
 	    port, hostkey, port_d, port_a) != 0) {
-		tap_skip(3, "switch: write config failed");
+		tap_skip(4, "switch: write config failed");
 		return;
 	}
 
@@ -336,6 +336,7 @@ static void test_switch(const struct proxy_env *e)
 		file_dump(log, "proxy.log");
 		tap_ok(0, "switch: user 'alice' routed to switch_target backend");
 		tap_ok(0, "switch: user 'bob' routed to default_server backend");
+		tap_ok(0, "switch: proxy advertises kex-strict-s (Terrapin mitigation)");
 		close(fd_a);
 		close(fd_d);
 		reap_pg(proxy_pid, 50);
@@ -367,6 +368,15 @@ static void test_switch(const struct proxy_env *e)
 	if (!tap_ok(hit_d && !hit_a,
 	    "switch: user 'bob' routed to default_server backend")) {
 		fprintf(stderr, "# hit_a=%d hit_d=%d\n", hit_a, hit_d);
+		file_dump(log, "proxy.log");
+	}
+
+	/* Terrapin: the proxy's server KEXINIT must advertise kex-strict-s-v00.
+	 * - tells the client to enable strict KEX too (one-sided = no effect)
+	 * - no real backend here, so the token can only be the proxy's own
+	 */
+	if (!tap_ok(file_contains(log, "kex-strict-s-v00@openssh.com"),
+	    "switch: proxy advertises kex-strict-s (Terrapin mitigation)")) {
 		file_dump(log, "proxy.log");
 	}
 
@@ -425,7 +435,7 @@ int main(int argc, char **argv)
 	struct proxy_env env;
 
 	(void)argc;
-	tap_plan(10);
+	tap_plan(11);
 
 	proxy_resolve_paths(&env, argv[0]);
 
