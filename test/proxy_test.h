@@ -116,6 +116,7 @@ static inline pid_t sshd_spawn(const struct proxy_env *e, const char *cfgpath,
 		return -1;
 	}
 	if (pid == 0) {
+		char sessopt[PATH_MAX + 32];
 		int dn = open("/dev/null", O_RDWR);
 		setpgid(0, 0);
 		if (dn >= 0) {
@@ -126,8 +127,15 @@ static inline pid_t sshd_spawn(const struct proxy_env *e, const char *cfgpath,
 				close(dn);
 			}
 		}
+		/* OpenSSH >= 9.8 execs a separate sshd-session - point it at the
+		 * built one, not the install path. PerSourcePenalties (new in
+		 * 9.8, on by default) would penalise 127.0.0.1 after the proxy's
+		 * probe connection and refuse the real login.
+		 */
+		snprintf(sessopt, sizeof(sessopt), "SshdSessionPath=%s",
+			e->tool.sshd_session);
 		execl(e->tool.sshd, e->tool.sshd, "-D", "-f", cfgpath, "-E", logpath,
-			(char *)NULL);
+			"-o", sessopt, "-o", "PerSourcePenalties=no", (char *)NULL);
 		_exit(127);
 	}
 	return pid;

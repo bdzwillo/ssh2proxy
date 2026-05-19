@@ -1,31 +1,30 @@
-diff -ur a/openssh-8.9p1-orig/Makefile.in a/openssh-8.9p1/Makefile.in
---- a/openssh-8.9p1-orig/Makefile.in	2022-02-23 12:31:11.000000000 +0100
-+++ b/openssh-8.9p1/Makefile.in	2024-08-30 16:11:01.000000000 +0200
-@@ -133,6 +133,8 @@
+diff -ur a/openssh-9.9p2-orig/Makefile.in a/openssh-9.9p2/Makefile.in
+--- a/openssh-9.9p2-orig/Makefile.in	2025-02-18 09:15:08.000000000 +0100
++++ b/openssh-9.9p2/Makefile.in	2026-06-26 00:21:37.000000000 +0200
+@@ -141,6 +141,8 @@
  	sandbox-seccomp-filter.o sandbox-capsicum.o sandbox-pledge.o \
  	sandbox-solaris.o uidswap.o $(SKOBJS)
- 
+
 +SSHPROXYOBJS=sshproxy.o proxyconf.o proxyauth.o ssh2.o switch-fixed.o filter-mitm.o $(SKOBJS)
 +
  SFTP_CLIENT_OBJS=sftp-common.o sftp-client.o sftp-glob.o
- 
+
  SCP_OBJS=	scp.o progressmeter.o $(SFTP_CLIENT_OBJS)
-@@ -190,6 +192,8 @@
+@@ -198,6 +200,8 @@
  $(LIBSSH_OBJS): Makefile.in config.h
  $(SSHOBJS): Makefile.in config.h
  $(SSHDOBJS): Makefile.in config.h
 +$(SSHPROXYOBJS): Makefile.in config.h
 +$(SSHPROXYOBJS): sshproxy.h proxyconf.h proxyauth.h switch.h check.h filter.h
- configure-check: $(srcdir)/configure
- 
- $(srcdir)/configure: configure.ac $(srcdir)/m4/*.m4
-@@ -214,6 +217,9 @@
+
+ .c.o:
+ 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+@@ -217,6 +221,9 @@
  sshd$(EXEEXT): libssh.a	$(LIBCOMPAT) $(SSHDOBJS)
- 	$(LD) -o $@ $(SSHDOBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS)
- 
+ 	$(LD) -o $@ $(SSHDOBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(CHANNELLIBS)
+
 +sshproxy$(EXEEXT): libssh.a $(LIBCOMPAT) $(SSHPROXYOBJS)
-+	$(LD) -o $@ $(SSHPROXYOBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS)
++	$(LD) -o $@ $(SSHPROXYOBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS) $(CHANNELLIBS)
 +
- scp$(EXEEXT): $(LIBCOMPAT) libssh.a $(SCP_OBJS)
- 	$(LD) -o $@ $(SCP_OBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(LIBS)
- 
+ sshd-session$(EXEEXT): libssh.a	$(LIBCOMPAT) $(SSHD_SESSION_OBJS)
+ 	$(LD) -o $@ $(SSHD_SESSION_OBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS) $(CHANNELLIBS)

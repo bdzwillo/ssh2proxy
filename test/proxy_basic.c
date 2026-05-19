@@ -36,10 +36,15 @@ static int read_field(const char *path, int n, char *buf, size_t bufsz)
 	if (f == NULL) {
 		return -1;
 	}
-	if (fgets(line, sizeof(line), f) == NULL) {
-		fclose(f);
-		return -1;
-	}
+	/* skip ssh-keyscan's leading "# host banner" comment lines (stdout
+	 * since OpenSSH 9.8) and any blank lines to reach the key line.
+	 */
+	do {
+		if (fgets(line, sizeof(line), f) == NULL) {
+			fclose(f);
+			return -1;
+		}
+	} while (line[0] == '#' || line[0] == '\n' || line[0] == '\r');
 	fclose(f);
 	for (tok = strtok(line, " \t\r\n"); tok != NULL; tok = strtok(NULL, " \t\r\n")) {
 		if (++i == n) {

@@ -101,9 +101,6 @@ static int ssh_compat_proposal(struct ssh *ssh)
 		return r;
 	}
 	proposal[PROPOSAL_KEX_ALGS] = compat_kex_proposal(ssh, proposal[PROPOSAL_KEX_ALGS]);
-	proposal[PROPOSAL_ENC_ALGS_CTOS] = compat_cipher_proposal(ssh, proposal[PROPOSAL_ENC_ALGS_CTOS]);
-	proposal[PROPOSAL_ENC_ALGS_STOC] = compat_cipher_proposal(ssh, proposal[PROPOSAL_ENC_ALGS_STOC]);
-	proposal[PROPOSAL_SERVER_HOST_KEY_ALGS] = compat_pkalg_proposal(ssh, proposal[PROPOSAL_SERVER_HOST_KEY_ALGS]);
 
 	r = kex_prop2buf(ssh->kex->my, proposal);
 	kex_prop_free(proposal);
@@ -123,6 +120,33 @@ static int ssh_add_ext_info_c(struct ssh *ssh)
 		return r;
 	}
 	if ((cat = kex_names_cat(proposal[PROPOSAL_KEX_ALGS], "ext-info-c")) == NULL) {
+		kex_prop_free(proposal);
+		return SSH_ERR_ALLOC_FAIL;
+	}
+	free(proposal[PROPOSAL_KEX_ALGS]);
+	proposal[PROPOSAL_KEX_ALGS] = cat;
+	r = kex_prop2buf(ssh->kex->my, proposal);
+	kex_prop_free(proposal);
+	return r;
+}
+
+/* advertise strict kex per leg (terrapin mitigation, OpenSSH >= 9.6).
+ * both peers must signal it or neither resets the packet sequence after
+ * NEWKEYS - a one-sided reset corrupts the first post-kex packet. the
+ * libssh kex code enables strict mode whenever the peer signals it, so
+ * the proxy has to echo the matching token on each leg.
+ */
+static int ssh_add_kex_strict(struct ssh *ssh)
+{
+	int r;
+	char **proposal, *cat;
+	const char *tok = ssh->kex->server ?
+		"kex-strict-s-v00@openssh.com" : "kex-strict-c-v00@openssh.com";
+
+	if ((r = kex_buf2prop(ssh->kex->my, NULL, &proposal)) != 0) {
+		return r;
+	}
+	if ((cat = kex_names_cat(proposal[PROPOSAL_KEX_ALGS], tok)) == NULL) {
 		kex_prop_free(proposal);
 		return SSH_ERR_ALLOC_FAIL;
 	}
@@ -289,6 +313,10 @@ int ssh2_kex_dispatch(struct ssh *ssh)
 		 * note: ssh_packet_read_seqnr() includes the handling for the
 		 *       SSH2_MSG_DEBUG/IGNORE/DISCONNECT messages like the
 		 *       nonblocking ssh_packet_read_poll_seqnr() call.
+		 *
+		 * note: in 9.9 this wait is a ppoll(2)/read(2) loop, not a
+		 *       single select()->read(), repeated until a full packet
+		 *       is buffered.
 		 */
 		if ((r = ssh_packet_read_seqnr(ssh, &type, &seqnr)) != 0) {
 			error("kex_dispatch: packet_read blocking: %s", ssh_err(r));
@@ -346,6 +374,10 @@ int ssh2_accept(struct ssh *ssh)
 
 	if ((r = ssh_compat_proposal(ssh)) != 0) {
 		error("accept: compat_proposal: %s", ssh_err(r));
+		return r;
+	}
+	if ((r = ssh_add_kex_strict(ssh)) != 0) {
+		error("accept: add kex-strict-s: %s", ssh_err(r));
 		return r;
 	}
 	if ((r = kex_send_kexinit(ssh)) != 0) {
@@ -451,6 +483,10 @@ int ssh2_connect(struct ssh *ssh)
 	}
 	if (!options.no_ext_info && (r = ssh_add_ext_info_c(ssh)) != 0) {
 		error("connect: add ext-info-c: %s", ssh_err(r));
+		return r;
+	}
+	if ((r = ssh_add_kex_strict(ssh)) != 0) {
+		error("connect: add kex-strict-c: %s", ssh_err(r));
 		return r;
 	}
 	if ((r = kex_send_kexinit(ssh)) != 0) {
