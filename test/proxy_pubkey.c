@@ -1289,12 +1289,15 @@ static void test_rekey(const struct proxy_env *e)
 	free(out);
 }
 
-/* test_interactive (2 tests): a full interactive pty session through the proxy.
+/* test_interactive (3 tests): a full interactive pty session through the proxy.
  *
  * - same hostbased full-login setup as test_hostbased, plus a usable pty in
  *   the sandbox (ns_setup_pty)
  * - drives a real client pty (pty_fork) and types a command whose output
  *   (OK_42) differs from the typed text, so a match proves it ran on the backend
+ * - with ObscureKeystrokeTiming on, the client fires ping@openssh.com chaff
+ *   (the proxy advertises ping but doesn't answer it - the chaff is relayed to
+ *   the backend, which sends the PONG); the session keeps working
  */
 static void test_interactive(const struct proxy_env *e)
 {
@@ -1313,41 +1316,41 @@ static void test_interactive(const struct proxy_env *e)
 	if (enter_userns() != 0) {
 		snprintf(reason, sizeof(reason),
 			"user namespaces unavailable (%s)", strerror(errno));
-		tap_skip(2, reason);
+		tap_skip(3, reason);
 		return;
 	}
 	if (make_tmpdir("ssh_proxy_interactive", tmp, sizeof(tmp)) != 0) {
-		tap_skip(2, "no tmpdir");
+		tap_skip(3, "no tmpdir");
 		return;
 	}
 	snprintf(home, sizeof(home), "%s/home", tmp);
 	snprintf(sshdir, sizeof(sshdir), "%s/.ssh", home);
 	if (mkdir(home, 0755) < 0 || mkdir(sshdir, 0755) < 0) {
-		tap_skip(2, "no sandbox home");
+		tap_skip(3, "no sandbox home");
 		return;
 	}
 	if (prep_hostbased_ns(tmp, home) != 0) {
 		snprintf(reason, sizeof(reason),
 			"namespace fs setup failed (%s)", strerror(errno));
-		tap_skip(2, reason);
+		tap_skip(3, reason);
 		return;
 	}
 	if (ns_setup_pty(tmp) != 0) {
 		snprintf(reason, sizeof(reason),
 			"sandbox pty unavailable (%s)", strerror(errno));
-		tap_skip(2, reason);
+		tap_skip(3, reason);
 		return;
 	}
 
 	snprintf(hostkey, sizeof(hostkey), "%s/hostkey", tmp);
 	snprintf(id, sizeof(id), "%s/id", tmp);
 	if (ssh_gen_key(&e->tool, hostkey) != 0 || ssh_gen_key(&e->tool, id) != 0) {
-		tap_skip(2, "keygen failed");
+		tap_skip(3, "keygen failed");
 		return;
 	}
 	snprintf(authkeys, sizeof(authkeys), "%s.pub", id);
 	if (setup_hostbased_trust(home, sshdir, authkeys) != 0) {
-		tap_skip(2, "hostbased trust setup failed");
+		tap_skip(3, "hostbased trust setup failed");
 		return;
 	}
 
@@ -1365,7 +1368,7 @@ static void test_interactive(const struct proxy_env *e)
 	    "HostbasedAuthentication yes\nHostbasedUsesNameFromPacketOnly yes\n"
 	    "IgnoreRhosts no\nAuthorizedKeysFile %s\n",
 	    bport, hostkey, authkeys) != 0) {
-		tap_skip(2, "no sshd cfg");
+		tap_skip(3, "no sshd cfg");
 		return;
 	}
 
@@ -1375,7 +1378,7 @@ static void test_interactive(const struct proxy_env *e)
 	if (!tap_ok(sshd_pid > 0 && wait_for_listen(bport, 5000) == 0,
 	    "interactive: backend sshd up on 127.0.0.1:%d (uid 0 in ns)", bport)) {
 		file_dump(slog, "sshd.log");
-		tap_skip(1, "backend sshd down");
+		tap_skip(2, "backend sshd down");
 		reap_pg(sshd_pid, 50);
 		return;
 	}
@@ -1385,14 +1388,14 @@ static void test_interactive(const struct proxy_env *e)
 	    "bindaddr = 127.0.0.1:%d\nhostkey = %s\nhostkey_auth = %s\n"
 	    "switch_methods = fixed\ndefault_server = 127.0.0.1:%d\n",
 	    pport, hostkey, id, bport) != 0) {
-		tap_skip(1, "no proxy cfg");
+		tap_skip(2, "no proxy cfg");
 		reap_pg(sshd_pid, 50);
 		return;
 	}
 	proxy_pid = proxy_spawn(e, pcfg, plog);
 	if (proxy_pid <= 0 || wait_for_listen(pport, 5000) != 0) {
 		file_dump(plog, "proxy.log");
-		tap_skip(1, "proxy down");
+		tap_skip(2, "proxy down");
 		reap_pg(proxy_pid, 50);
 		reap_pg(sshd_pid, 50);
 		return;
@@ -1401,7 +1404,7 @@ static void test_interactive(const struct proxy_env *e)
 	snprintf(portarg, sizeof(portarg), "%d", pport);
 	ssh_pid = pty_fork(&master);
 	if (ssh_pid < 0) {
-		tap_skip(1, "pty_fork failed");
+		tap_skip(2, "pty_fork failed");
 		reap_pg(proxy_pid, 50);
 		reap_pg(sshd_pid, 50);
 		return;
@@ -1422,13 +1425,15 @@ static void test_interactive(const struct proxy_env *e)
 			"-o", "UserKnownHostsFile=/dev/null",
 			"-o", "GlobalKnownHostsFile=/dev/null",
 			"-o", "PreferredAuthentications=publickey",
+			"-o", "ObscureKeystrokeTiming=yes",
 			"-vvv", "-i", id, "-p", portarg, "root@127.0.0.1",
 			(char *)NULL);
 		_exit(127);
 	}
 
 	/* drive the session on a timeline while reading concurrently so no pty
-	 * output is lost at teardown
+	 * output is lost at teardown; hold it open longer than the chaff window
+	 * (~1-3s after a keystroke) so the obfuscation chaff actually fires
 	 */
 	clock_gettime(CLOCK_MONOTONIC, &start);
 	for (;;) {
@@ -1445,11 +1450,11 @@ static void test_interactive(const struct proxy_env *e)
 			dprintf(master, "echo OK_$((6*7))\n");
 			sent_cmd = 1;
 		}
-		if (!sent_exit && el >= 3.0) {
+		if (!sent_exit && el >= 4.5) {
 			dprintf(master, "exit\n");
 			sent_exit = 1;
 		}
-		if (el >= 5.0) {
+		if (el >= 7.0) {
 			break;
 		}
 		FD_ZERO(&rf);
@@ -1475,6 +1480,9 @@ static void test_interactive(const struct proxy_env *e)
 	    "interactive: pty session runs a command through the proxy")) {
 		file_dump(slog, "sshd.log");
 		file_dump(plog, "proxy.log");
+	}
+	if (!tap_ok(file_contains(sshlog, "chaff packets sent"),
+	    "interactive: keystroke-obfuscation chaff traverses the proxy")) {
 		file_dump(sshlog, "ssh.log");
 	}
 
@@ -1487,7 +1495,7 @@ int main(int argc, char **argv)
 	struct proxy_env env;
 
 	(void)argc;
-	tap_plan(25);
+	tap_plan(26);
 
 	proxy_resolve_paths(&env, argv[0]);
 	test_pubkey(&env);        /* observable steps (no namespace) */
@@ -1499,7 +1507,7 @@ int main(int argc, char **argv)
 	test_hostbased_rsa_legacy(&env); /* ssh-rsa-only backend (user namespace) */
 	test_hostbased_rsa_oldclient(&env); /* ssh-rsa-only client (user namespace) */
 	test_rekey(&env);         /* in-session rekeying (user namespace) */
-	test_interactive(&env);   /* interactive pty session (user namespace) */
+	test_interactive(&env);   /* interactive pty session + ping chaff (user namespace) */
 
 	return tap_done();
 }
