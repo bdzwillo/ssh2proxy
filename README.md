@@ -9,7 +9,7 @@ using the api of the libssh.a provided by the openssh project.
 This allows the proxy code to stay in sync with openssh updates
 and bugfixes.
 
-The current version is built on top of openssh-9.9p2.
+The current version is built on top of openssh-10.3p1.
 
 The proxy supports ssh2 password & pubkey authentication.
 
@@ -185,6 +185,6 @@ configured in the SSHDIR/etc/ssh_known_hosts file.
   (will try all hostkeys without HostbasedAcceptedAlgorithms option)
   ```
   clientuser@clienthost # ssh -v -o PubkeyAuthentication=no -o PasswordAuthentication=no \
-          -o HostbasedAuthentication=yes -o HostbasedAcceptedAlgorithms=rsa-sha2-* <user>@<sshserver>
+    -o HostbasedAuthentication=yes -o HostbasedAcceptedAlgorithms=rsa-sha2-* <user>@<sshserver>
   ```
 

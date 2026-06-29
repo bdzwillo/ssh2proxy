@@ -2,11 +2,11 @@
 # sshproxy - openssh based ssh2 proxy for multiple ssh backend hosts
 #
 # need to download openssh tar-archive first, like:
-# > wget https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-9.9p2.tar.gz
+# > wget https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.3p1.tar.gz
 #
 INSTDIR =		/opt
 PACKAGE_NAME =		ssh2proxy
-OPENSSH =		openssh-9.9p2
+OPENSSH =		openssh-10.3p1
 
 PATCH = patch
 SSH_PATCHES = Makefile.in.patch
@@ -87,7 +87,7 @@ openssh:
 
 # the tests run ssh/ssh-keygen/ssh-keyscan/sshd as well as sshproxy
 test-tools: sshproxy openssh
-	(cd $(OPENSSH) && make ssh ssh-keygen ssh-keyscan sshd sshd-session)
+	(cd $(OPENSSH) && make ssh ssh-keygen ssh-keyscan sshd sshd-session sshd-auth)
 
 # tests resolve tools by path ($SSHPROXY/$SSH/$KEYGEN/$KEYSCAN override); each
 # keeps a /tmp/<name>.<pid> work dir for inspection

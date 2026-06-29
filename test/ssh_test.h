@@ -43,6 +43,7 @@ struct ssh_env {
 	char keyscan[PATH_MAX + 32];
 	char sshd[PATH_MAX + 32];
 	char sshd_session[PATH_MAX + 32];
+	char sshd_auth[PATH_MAX + 32];
 	char sftp[PATH_MAX + 32];
 	char scp[PATH_MAX + 32];
 	const char *argv0;
@@ -60,7 +61,7 @@ static inline void ssh_resolve_tools(struct ssh_env *t, const char *argv0)
 	const char *root = ".";
 	char d_ssh[PATH_MAX + 32], d_keygen[PATH_MAX + 32], d_keyscan[PATH_MAX + 32];
 	char d_sshd[PATH_MAX + 32], d_sftp[PATH_MAX + 32], d_scp[PATH_MAX + 32];
-	char d_sshd_session[PATH_MAX + 32];
+	char d_sshd_session[PATH_MAX + 32], d_sshd_auth[PATH_MAX + 32];
 
 	if (argv0 && realpath(argv0, resolved)) {
 		slash = strrchr(resolved, '/');     /* strip the binary name */
@@ -79,6 +80,7 @@ static inline void ssh_resolve_tools(struct ssh_env *t, const char *argv0)
 	snprintf(d_keyscan, sizeof(d_keyscan), "%s/openssh/ssh-keyscan", root);
 	snprintf(d_sshd,    sizeof(d_sshd),    "%s/openssh/sshd", root);
 	snprintf(d_sshd_session, sizeof(d_sshd_session), "%s/openssh/sshd-session", root);
+	snprintf(d_sshd_auth, sizeof(d_sshd_auth), "%s/openssh/sshd-auth", root);
 	snprintf(d_sftp,    sizeof(d_sftp),    "%s/openssh/sftp", root);
 	snprintf(d_scp,     sizeof(d_scp),     "%s/openssh/scp", root);
 	snprintf(t->ssh,     sizeof(t->ssh),     "%s", env_default("SSH", d_ssh));
@@ -86,6 +88,7 @@ static inline void ssh_resolve_tools(struct ssh_env *t, const char *argv0)
 	snprintf(t->keyscan, sizeof(t->keyscan), "%s", env_default("KEYSCAN", d_keyscan));
 	snprintf(t->sshd,    sizeof(t->sshd),    "%s", env_default("SSHD", d_sshd));
 	snprintf(t->sshd_session, sizeof(t->sshd_session), "%s", env_default("SSHD_SESSION", d_sshd_session));
+	snprintf(t->sshd_auth, sizeof(t->sshd_auth), "%s", env_default("SSHD_AUTH", d_sshd_auth));
 	snprintf(t->sftp,    sizeof(t->sftp),    "%s", env_default("SFTP", d_sftp));
 	snprintf(t->scp,     sizeof(t->scp),     "%s", env_default("SCP", d_scp));
 	t->argv0 = argv0;

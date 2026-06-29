@@ -127,7 +127,7 @@ struct Filtermethod *filtermethods[] = {
 	NULL
 };
 
-#define PROXY_VERSION "0.25"
+#define PROXY_VERSION "0.26"
 
 static void usage(void)
 {

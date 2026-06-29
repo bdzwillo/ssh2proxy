@@ -1,30 +1,31 @@
-diff -ur a/openssh-9.9p2-orig/Makefile.in a/openssh-9.9p2/Makefile.in
---- a/openssh-9.9p2-orig/Makefile.in	2025-02-18 09:15:08.000000000 +0100
-+++ b/openssh-9.9p2/Makefile.in	2026-06-26 00:21:37.000000000 +0200
-@@ -141,6 +141,8 @@
- 	sandbox-seccomp-filter.o sandbox-capsicum.o sandbox-pledge.o \
- 	sandbox-solaris.o uidswap.o $(SKOBJS)
+diff -ur a/openssh-10.3p1-orig/Makefile.in a/openssh-10.3p1/Makefile.in
+--- a/openssh-10.3p1-orig/Makefile.in
++++ b/openssh-10.3p1/Makefile.in
+@@ -150,6 +150,8 @@
+ 	sftp-server.o sftp-common.o \
+ 	uidswap.o $(P11OBJS) $(SKOBJS)
 
-+SSHPROXYOBJS=sshproxy.o proxyconf.o proxyauth.o ssh2.o switch-fixed.o filter-mitm.o $(SKOBJS)
++SSHPROXYOBJS=sshproxy.o proxyconf.o proxyauth.o ssh2.o switch-fixed.o filter-mitm.o $(P11OBJS) $(SKOBJS)
 +
- SFTP_CLIENT_OBJS=sftp-common.o sftp-client.o sftp-glob.o
-
+ SFTP_CLIENT_OBJS=sftp-common.o sftp-client.o sftp-glob.o ssherr-nolibcrypto.o
+ 
  SCP_OBJS=	scp.o progressmeter.o $(SFTP_CLIENT_OBJS)
-@@ -198,6 +200,8 @@
+@@ -206,6 +208,8 @@
  $(LIBSSH_OBJS): Makefile.in config.h
  $(SSHOBJS): Makefile.in config.h
  $(SSHDOBJS): Makefile.in config.h
 +$(SSHPROXYOBJS): Makefile.in config.h
 +$(SSHPROXYOBJS): sshproxy.h proxyconf.h proxyauth.h switch.h check.h filter.h
-
+ 
  .c.o:
  	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
-@@ -217,6 +221,9 @@
+@@ -225,6 +229,9 @@
  sshd$(EXEEXT): libssh.a	$(LIBCOMPAT) $(SSHDOBJS)
  	$(LD) -o $@ $(SSHDOBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(CHANNELLIBS)
-
+ 
 +sshproxy$(EXEEXT): libssh.a $(LIBCOMPAT) $(SSHPROXYOBJS)
 +	$(LD) -o $@ $(SSHPROXYOBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS) $(CHANNELLIBS)
 +
  sshd-session$(EXEEXT): libssh.a	$(LIBCOMPAT) $(SSHD_SESSION_OBJS)
- 	$(LD) -o $@ $(SSHD_SESSION_OBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS) $(CHANNELLIBS)
+ 	$(LD) -o $@ $(SSHD_SESSION_OBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS) $(CHANNELLIBS) $(LIBWTMPDB)
+ 
