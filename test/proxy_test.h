@@ -116,7 +116,7 @@ static inline pid_t sshd_spawn(const struct proxy_env *e, const char *cfgpath,
 		return -1;
 	}
 	if (pid == 0) {
-		char sessopt[PATH_MAX + 32], authopt[PATH_MAX + 32];
+		char sessopt[PATH_MAX + 48], authopt[PATH_MAX + 48];
 		int dn = open("/dev/null", O_RDWR);
 		setpgid(0, 0);
 		if (dn >= 0) {
