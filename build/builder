@@ -195,5 +195,5 @@ fi
 
 set -x
 
-podman run --rm -it -h ${IMAGE_HOST} --tz local --security-opt label=disable --userns=keep-id --group-add=keep-groups --runtime=/usr/bin/crun -v "${HOSTROOT}:${HOMEDIR}" ${ADD_BASHRC} -e ARCH=linux -e USER=${USER} -e TERM=${TERM} -w ${HOMEDIR} -e IN_CONTAINER=${IMAGE_VERSION} ${ADD_GITCONFIG} ${ADD_VIMRC} ${ADD_GNUPG} ${ADD_COPILOT} ${ADD_CLAUDE} ${ADD_AUTHSOCK} ${IMAGE} bash -l -c "${COMMAND}"
+podman run --rm -it -h ${IMAGE_HOST} --tz local --security-opt unmask=/proc/sys --security-opt label=disable --userns=keep-id --group-add=keep-groups --runtime=/usr/bin/crun -v "${HOSTROOT}:${HOMEDIR}" ${ADD_BASHRC} -e ARCH=linux -e USER=${USER} -e TERM=${TERM} -w ${HOMEDIR} -e IN_CONTAINER=${IMAGE_VERSION} ${ADD_GITCONFIG} ${ADD_VIMRC} ${ADD_GNUPG} ${ADD_COPILOT} ${ADD_CLAUDE} ${ADD_AUTHSOCK} ${IMAGE} bash -l -c "${COMMAND}"
 
