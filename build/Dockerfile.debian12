@@ -14,6 +14,9 @@ RUN apt-get update && apt-get -y install \
 	sudo libtool universal-ctags \
 	nodejs npm
 
+# add tc for qdisc/netem traffic shaping tests
+RUN apt-get -y install iproute2
+
 # allow sudo (--group-add=keep-groups does not allow --group-add=wheel)
 ARG DOCKER_USER
 RUN echo "%$DOCKER_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/allowsudo
