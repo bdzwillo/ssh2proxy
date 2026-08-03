@@ -1,0 +1,65 @@
+# Corrections on top of ssh-hpn.patch, kept separate so that the latter stays a
+# verbatim FreeBSD patch that 'make hpn-patch' can refresh. They apply to the
+# receive window of the ssh/sshd built here; the sshproxy itself needs no
+# change. The two window fixes were measured with the perf harness on a
+# 200ms/1gbit link, 512 MiB transfers.
+#
+# - advertise only 3/4 of the socket buffer. A peer buffers a whole window in
+#   userspace (the sshbuf_len(c->input) < c->remote_window gate in
+#   channel_pre_open) and stalls once the window reaches its socket buffer,
+#   which fills and makes TCP zero-window. Download from a non-HPN sender, by
+#   tcp_rmem ceiling (MiB/s):
+#     ceiling    no cap   3/4 of SO_RCVBUF
+#      32 MB       44.9         51.6
+#      64 MB       30.3         56.8
+#     128 MB       42.8         55.1
+#   A fixed cap cannot do this: the stall point moves with the ceiling, and any
+#   constant low enough to be safe at 32 MB throttles below the BDP at 128 MB.
+#   The headroom helps an HPN peer as much as a non-HPN one, so it is not gated
+#   on SSH_BUG_LARGEWINDOW (measured 34-40% on a 1gbit/50ms link).
+#
+# - grow the window to the socket buffer instead of 1.5x past it. The overshoot
+#   costs an HPN download 1.8x (27 vs 48 MiB/s), because the advertised window
+#   runs ahead of the receive buffer rather than tracking the path.
+#
+# - use the bare "_hpn" banner marker the backends use, not FreeBSD's
+#   "-hpn14v15" (either satisfies the strstr("hpn") peer detection).
+--- a/openssh-10.3p1-orig/channels.c
++++ b/openssh-10.3p1/channels.c
+@@ -1337,6 +1337,14 @@
+ 	if ((ret == 0) && tcpwinsz > SSHBUF_SIZE_MAX)
+ 		tcpwinsz = SSHBUF_SIZE_MAX;
+ 
++	/*
++	 * a peer buffers a whole window in userspace (channel_pre_open) and
++	 * stalls once that window reaches its socket buffer, so keep a quarter
++	 * as headroom - ~1.5x the BDP at the usual 2x BDP tcp_rmem. It helps an
++	 * HPN peer as much as a non-HPN one, hence unconditional
++	 */
++	tcpwinsz = tcpwinsz / 4 * 3;
++
+ 	debug2("tcpwinsz: tcp connection %d, Receive window: %d",
+ 	       ssh_packet_get_connection_in(ssh), tcpwinsz);
+ 	return tcpwinsz;
+@@ -2476,8 +2484,11 @@
+ 		u_int32_t tcpwinsz = channel_tcpwinsz(ssh);
+ 		/* adjust max window size if we are in a dynamic environment */
+ 		if (c->dynamic_window && (tcpwinsz > c->local_window_max)) {
+-			/* grow the window somewhat aggressively to maintain pressure */
+-			addition = 1.5 * (tcpwinsz - c->local_window_max);
++			/* grow the window to the current socket buffer size: 1.5x
++			 * overshoots it, and the advertised window then runs ahead
++			 * of the receive buffer instead of tracking the path
++			 */
++			addition = tcpwinsz - c->local_window_max;
+ 			c->local_window_max += addition;
+ 			debug("Channel: Window growth to %d by %d bytes", c->local_window_max, addition);
+ 		}
+--- a/openssh-10.3p1-orig/version.h
++++ b/openssh-10.3p1/version.h
+@@ -4,4 +4,4 @@
+ 
+ #define SSH_PORTABLE	"p1"
+ #define SSH_RELEASE	SSH_VERSION SSH_PORTABLE
+-#define SSH_HPN         "-hpn14v15"
++#define SSH_HPN         "_hpn"		/* bare marker, as the backends use */
