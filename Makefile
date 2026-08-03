@@ -91,6 +91,27 @@ test/proxy_hpn: test/proxy_hpn.c test/proxy_test.h test/ssh_test.h test/util.h t
 test/setgroups_stub.so: test/setgroups_stub.c
 	gcc -shared -fPIC $< -o $@
 
+# HPN throughput benchmark through the proxy (HPN endpoints vs the stock 2MB
+# window), not in "make test". Runs over a netem-shaped veth pair across two
+# net namespaces - a real forwarding path that streams at window/RTT, so the
+# window shows - with the proxy and its backend sshd in the server namespace.
+# A raw-TCP link ceiling runs first, then ssh-pipe download and upload.
+# - run:              make perf
+# - HPN_PERF_MB       transfer size in MiB (default 512)
+# - HPN_PERF_RTT_MS   round-trip time in ms (default 200; 0 = none)
+# - HPN_PERF_RATE     per-endpoint rate cap in Mbit/s (default 1000; 0 = none)
+# - HPN_PERF_RMEM_MB  TCP buffer ceiling in MiB (default auto ~2*BDP, min 64)
+# - HPN_PERF_CC       TCP congestion control, both ns (default kernel default)
+# Shaping needs iproute2; runs in unprivileged user+net namespaces, raising the
+# buffers needs a writable /proc/sys/net.
+PERF_BINS = test/proxy_hpn_perf
+
+test/proxy_hpn_perf: test/proxy_hpn_perf.c test/proxy_test.h test/ssh_test.h test/util.h test/chroot_ns.h test/tap.h test/perf_test.h
+	gcc -g -Wall $< -o $@
+
+perf: test-tools $(PERF_BINS)
+	@for t in $(PERF_BINS); do echo "== $$t =="; ./$$t; done
+
 # repoint the openssh symlink at $(OPENSSH) so tests run the freshly-built sshd
 .PHONY: openssh
 openssh:
