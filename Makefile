@@ -71,7 +71,7 @@ sshproxy: $(OPENSSH)
 		make sshproxy)
 
 # Unprivileged integration tests against the freshly-built sshproxy (see test/).
-TEST_BINS = test/proxy_basic test/proxy_password test/proxy_pubkey
+TEST_BINS = test/proxy_basic test/proxy_password test/proxy_pubkey test/proxy_hpn
 
 test/proxy_basic: test/proxy_basic.c test/proxy_test.h test/ssh_test.h test/util.h test/tap.h
 	gcc -g -Wall $< -o $@
@@ -81,6 +81,11 @@ test/proxy_password: test/proxy_password.c test/proxy_test.h test/ssh_test.h tes
 	gcc -g -Wall $< -o $@ -lcrypt
 
 test/proxy_pubkey: test/proxy_pubkey.c test/proxy_test.h test/ssh_test.h test/util.h test/chroot_ns.h test/tap.h test/setgroups_stub.so
+	gcc -g -Wall $< -o $@
+
+# HPN test: an end-to-end window-growth check through a real backend sshd
+# behind the proxy; skips on a stock build
+test/proxy_hpn: test/proxy_hpn.c test/proxy_test.h test/ssh_test.h test/util.h test/chroot_ns.h test/tap.h test/setgroups_stub.so
 	gcc -g -Wall $< -o $@
 
 test/setgroups_stub.so: test/setgroups_stub.c
