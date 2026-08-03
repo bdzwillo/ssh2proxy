@@ -188,3 +188,59 @@ configured in the SSHDIR/etc/ssh_known_hosts file.
     -o HostbasedAuthentication=yes -o HostbasedAcceptedAlgorithms=rsa-sha2-* <user>@<sshserver>
   ```
 
+Support for high performance ssh-hpn receive-window scaling
+-----------------------------------------------------------
+HPN enabled ssh endpoints scale the SSH channel receive window with the kernel's
+TCP receive buffer instead of leaving it at OpenSSH's fixed 2 MB. It raises
+throughput once the Bandwidth-Delay Product (BDP = rate × RTT) of a connection
+exceeds that window, because a sender that has filled the receiver's window has
+to stop until the window is extended again.
+
+The proxy just relays packets and owns none of the ssh channels, so the
+`SSH_MSG_CHANNEL_WINDOW_ADJUST` passes through untouched and client and backend
+negotiate their windows end-to-end. The proxy terminates the transport on both
+legs and sends its own banner, so neither endpoint sees the other's `_hpn`
+marker and can not depend on it for the ssh windows growth. Enabling HPN is a
+matter for the two endpoints, and only the receiving side of a transfer matters:
+
+| transfer                   | receiver | HPN has to be on   |
+|----------------------------|----------|--------------------|
+| download (from the server) | client   | ssh                |
+| upload (to the server)     | server   | sshd               |
+
+For a speed-up the OS receive buffer has to be sized to the BDP. The
+`net.ipv4.tcp_rmem` (and `tcp_wmem`) max values should be set to ~2×BDP.
+For too small values the ssh window cannot grow.
+
+The `make perf` performance test measures a HPN setup inside an unprivileged
+build container, and compares a raw-TCP link ceiling vs a bulk ssh upload and
+download through the proxy, with HPN on both endpoints either enabled/disabled.
+
+For the ssh implementation the FreeBSD ports HPN `ssh-hpn.patch` is used.
+A small patch on top allows it to advertise up to 3/4 of the socket buffer
+to any peer even without '_hpn' signalling from the remote side.
+
+The proxy relays with blocking writes: while it writes to one peer, the socket
+buffer of the other has to hold the data still in flight. The tcp windows are
+adjusted by Linux kernel autotuning.
+
+For the performance test proxy and backend both sit in the server namespace
+and talk over local virtual ethernet interfaces using netem/qdisc to shape
+the traffic on the client-to-proxy hop to simulate WAN-facing traffic. The
+best test results are reached when a tcp_bbr congestion-control module is
+available to avoid the burstiness of the default Linux CUBIC congestion-control
+module for local loopback tests:
+```
+[client ns] ssh  veth-c <==netem==> veth-s  sshproxy -> sshd  [server ns]
+```
+The throughput comparison for a 512 MiB file over a 200ms / 1000mbit link
+(~25 MB BDP) shows approx. a 7x improvement for a HPN enabled connection:
+```
+# ceiling : up  71.2  down  76.9 MiB/s  (60%/65% of 1000mbit cap)
+# download: hpn  56.3 | off   8.7 MiB/s   hpn/off  6.50x   inflt 36 / 2 MB
+# upload  : hpn  38.1 | off   4.8 MiB/s   hpn/off  7.93x   inflt 13 / 2 MB
+```
+Without HPN both directions are limited at the stock ssh 2 MB window.
+The upload measurement varies because the receiver sits on the non-shaped
+proxy-to-backend connection, which sizes the window.
+
