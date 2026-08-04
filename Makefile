@@ -2,11 +2,11 @@
 # sshproxy - openssh based ssh2 proxy for multiple ssh backend hosts
 #
 # need to download openssh tar-archive first, like:
-# > wget https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.3p1.tar.gz
+# > wget https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.4p1.tar.gz
 #
 INSTDIR =		/opt
 PACKAGE_NAME =		ssh2proxy
-OPENSSH =		openssh-10.3p1
+OPENSSH =		openssh-10.4p1
 
 PATCH = patch
 SSH_PATCHES = Makefile.in.patch ssh-hpn.patch ssh-hpn-fix.patch

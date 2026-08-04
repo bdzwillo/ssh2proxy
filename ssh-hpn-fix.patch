@@ -24,9 +24,9 @@
 #
 # - use the bare "_hpn" banner marker the backends use, not FreeBSD's
 #   "-hpn14v15" (either satisfies the strstr("hpn") peer detection).
---- a/openssh-10.3p1-orig/channels.c
-+++ b/openssh-10.3p1/channels.c
-@@ -1337,6 +1337,14 @@
+--- a/openssh-10.4p1-orig/channels.c
++++ b/openssh-10.4p1/channels.c
+@@ -1341,6 +1341,14 @@
  	if ((ret == 0) && tcpwinsz > SSHBUF_SIZE_MAX)
  		tcpwinsz = SSHBUF_SIZE_MAX;
  
@@ -41,7 +41,7 @@
  	debug2("tcpwinsz: tcp connection %d, Receive window: %d",
  	       ssh_packet_get_connection_in(ssh), tcpwinsz);
  	return tcpwinsz;
-@@ -2476,8 +2484,11 @@
+@@ -2485,8 +2493,11 @@
  		u_int32_t tcpwinsz = channel_tcpwinsz(ssh);
  		/* adjust max window size if we are in a dynamic environment */
  		if (c->dynamic_window && (tcpwinsz > c->local_window_max)) {
@@ -55,8 +55,8 @@
  			c->local_window_max += addition;
  			debug("Channel: Window growth to %d by %d bytes", c->local_window_max, addition);
  		}
---- a/openssh-10.3p1-orig/version.h
-+++ b/openssh-10.3p1/version.h
+--- a/openssh-10.4p1-orig/version.h
++++ b/openssh-10.4p1/version.h
 @@ -4,4 +4,4 @@
  
  #define SSH_PORTABLE	"p1"

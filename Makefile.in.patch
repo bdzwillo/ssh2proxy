@@ -1,16 +1,16 @@
-diff -ur a/openssh-10.3p1-orig/Makefile.in a/openssh-10.3p1/Makefile.in
---- a/openssh-10.3p1-orig/Makefile.in
-+++ b/openssh-10.3p1/Makefile.in
-@@ -150,6 +150,8 @@
+diff -ur a/openssh-10.4p1-orig/Makefile.in a/openssh-10.4p1/Makefile.in
+--- a/openssh-10.4p1-orig/Makefile.in
++++ b/openssh-10.4p1/Makefile.in
+@@ -151,6 +151,8 @@
  	sftp-server.o sftp-common.o \
  	uidswap.o $(P11OBJS) $(SKOBJS)
-
+ 
 +SSHPROXYOBJS=sshproxy.o proxyconf.o proxyauth.o ssh2.o switch-fixed.o filter-mitm.o $(P11OBJS) $(SKOBJS)
 +
  SFTP_CLIENT_OBJS=sftp-common.o sftp-client.o sftp-glob.o ssherr-nolibcrypto.o
  
  SCP_OBJS=	scp.o progressmeter.o $(SFTP_CLIENT_OBJS)
-@@ -206,6 +208,8 @@
+@@ -207,6 +209,8 @@
  $(LIBSSH_OBJS): Makefile.in config.h
  $(SSHOBJS): Makefile.in config.h
  $(SSHDOBJS): Makefile.in config.h
@@ -19,7 +19,7 @@ diff -ur a/openssh-10.3p1-orig/Makefile.in a/openssh-10.3p1/Makefile.in
  
  .c.o:
  	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
-@@ -225,6 +229,9 @@
+@@ -226,6 +230,9 @@
  sshd$(EXEEXT): libssh.a	$(LIBCOMPAT) $(SSHDOBJS)
  	$(LD) -o $@ $(SSHDOBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(CHANNELLIBS)
  
