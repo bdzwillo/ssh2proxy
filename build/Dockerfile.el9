@@ -4,8 +4,13 @@
 # > buildah build -f Dockerfile.el9 -t rocky-builder:9.8
 # > build/builder rocky-builder:9.8 bash
 #
-ARG IMAGE=rocky-devel:9.8
-FROM registry.in.strato.de/webgods/container/base/$IMAGE
+ARG IMAGE=rockylinux:9.8
+FROM docker.io/rockylinux/$IMAGE
+
+RUN yum -y group install "Development Tools"
+RUN yum -y install yum-utils
+# crb repo (ex powertools) for a.e. libnsl2-devel
+RUN yum-config-manager --set-enabled crb
 
 RUN yum -y install perl-libwww-perl
 RUN yum -y install perl-Test-Simple
@@ -15,6 +20,11 @@ RUN yum -y install createrepo_c
 RUN yum -y install systemd-devel
 RUN yum -y install libnsl2-devel
 RUN yum -y install libcap-devel
+RUN yum -y install openssl-devel
+RUN yum -y install perl-Net-DNS
+RUN yum -y install perl-Test-Simple
+RUN yum -y install perl-Test-Harness
+RUN yum -y install sudo
 
 # add tc for qdisc/netem traffic shaping tests
 RUN yum -y install iproute-tc
