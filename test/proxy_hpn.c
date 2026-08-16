@@ -234,7 +234,8 @@ static void test_window_growth(const struct proxy_env *e)
 		};
 		run_capture_e(a, 0, NULL, 0, errf);   /* stdout drained + discarded */
 	}
-	if (!tap_ok(file_contains(errf, "Window growth"),
+	if (!tap_ok(file_contains(errf, "Window growth") ||
+	    file_contains(errf, "Enabled Dynamic Window Scaling"),
 	    "hpn_grow: client window grows on a bulk download through the proxy")) {
 		file_dump(errf, "ssh.err");
 		file_dump(plog, "proxy.log");
