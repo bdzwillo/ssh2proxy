@@ -225,6 +225,9 @@ int ssh2_recv_kexinit(struct ssh *ssh)
 	return 0;
 }
 
+/* proxy version of libssh ssh_dispatch_run(ssh, DISPATCH_BLOCK, &kex->done)
+ * - on kex negotiation failure logs the rejected algorithm & remote address.
+ */
 int ssh2_kex_dispatch(struct ssh *ssh)
 {
 	int r;
@@ -262,6 +265,15 @@ int ssh2_kex_dispatch(struct ssh *ssh)
 		if (type > 0 && type < DISPATCH_MAX &&
 		    type >= SSH2_MSG_KEXINIT && type <= SSH2_MSG_TRANSPORT_MAX &&
 		    ssh->dispatch[type] != NULL) {
+			/* skip a peer's stale guessed kex packet: kex_choose_conf()
+			 * sets dispatch_skip_packets after a wrong first_kex_follows
+			 * guess (RFC 4253 sec. 7.1) - only non-OpenSSH peers guess.
+			 */
+			if (ssh->dispatch_skip_packets) {
+				debug2("%s: skipped packet (type %u)", __func__, type);
+				ssh->dispatch_skip_packets--;
+				continue;
+			}
 			if ((r = (*ssh->dispatch[type])(type, seqnr, ssh)) != 0) {
 				switch (r) {
 				case SSH_ERR_NO_CIPHER_ALG_MATCH:
